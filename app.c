@@ -2709,6 +2709,36 @@ int key_dialog(void)
 	return 1;
 }
 
+int ssh_skip_connect_dialog = 0;
+
+static int file_readable(const char* path)
+{
+	FILE* f;
+	if (path == NULL || path[0] == '\0') return 0;
+	f = fopen(path, "rb");
+	if (f) fclose(f);
+	return f != NULL;
+}
+
+/* "ssh user@host" from the shell: the host and user are already set, so
+   use a key if there is one (saved key files or Documents:.ssh:id_ecdsa),
+   otherwise ask only for the password. */
+static int quick_login_choice(void)
+{
+	int have_key = file_readable(prefs.pubkey_path) && file_readable(prefs.privkey_path);
+	if (!have_key)
+	{
+		char* pub = default_key_path("id_ecdsa.pub");
+		char* priv = default_key_path("id_ecdsa");
+		have_key = (pub != NULL && priv != NULL);
+		free(pub);
+		free(priv);
+	}
+	if (have_key)
+		return key_dialog();
+	return password_dialog(DLOG_PASSWORD);
+}
+
 int intro_dialog(void)
 {
 	// modal dialog setup
@@ -2989,7 +3019,13 @@ int ssh_connect(int session_idx)
 		EndUpdate(wc->win);
 	}
 
-	ok = intro_dialog();
+	if (ssh_skip_connect_dialog)
+	{
+		ssh_skip_connect_dialog = 0;
+		ok = quick_login_choice();
+	}
+	else
+		ok = intro_dialog();
 
 	if (!ok) printf_s(session_idx, "Cancelled, not connecting.\r\n");
 

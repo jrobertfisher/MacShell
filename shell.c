@@ -2540,19 +2540,33 @@ static void cmd_open(int idx, int argc, char* argv[])
 
 static void cmd_ssh(int idx, int argc, char* argv[])
 {
-	/* parse: ssh [user@]host[:port] */
-	if (argc > 1)
+	/* ssh [user@]host[:port] connects straight away; plain ssh opens the Connect dialog */
+	int skip_dialog = 0;
+
+	if (argc > 2 || (argc == 2 && argv[1][0] == '-'))
+	{
+		vt_write(idx, "usage: ssh [user@]host[:port]\r\n"
+		              "  uses the key in Documents:.ssh if there is one, otherwise asks for the password;\r\n"
+		              "  ssh on its own opens the Connect dialog\r\n");
+		return;
+	}
+
+	if (argc == 2)
 	{
 		char arg[256];
+		char* user = NULL;
+		char* host;
+		char* port = NULL;
+		char* at;
+		char* colon;
+		int hlen, plen;
+
 		strncpy(arg, argv[1], sizeof(arg) - 1);
 		arg[255] = '\0';
-
-		char* user = NULL;
-		char* host = arg;
-		char* port = NULL;
+		host = arg;
 
 		/* split user@host */
-		char* at = strchr(arg, '@');
+		at = strrchr(arg, '@');
 		if (at)
 		{
 			*at = '\0';
@@ -2561,51 +2575,63 @@ static void cmd_ssh(int idx, int argc, char* argv[])
 		}
 
 		/* split host:port */
-		char* colon = strchr(host, ':');
+		colon = strchr(host, ':');
 		if (colon)
 		{
 			*colon = '\0';
 			port = colon + 1;
 		}
+		if (host[0] == '\0')
+		{
+			vt_write(idx, "ssh: no host given\r\n");
+			return;
+		}
 
-		/* fill in prefs as pascal strings */
-		if (user)
+		/* settings are Pascal strings that are also read as C strings: clear the rest */
+		if (user && user[0])
 		{
 			int ulen = strlen(user);
 			if (ulen > 254) ulen = 254;
+			memset(prefs.username, 0, sizeof(prefs.username));
 			prefs.username[0] = ulen;
 			memcpy(prefs.username + 1, user, ulen);
 		}
 
+		memset(prefs.port, 0, sizeof(prefs.port));
+		if (port && port[0])
 		{
-			int hlen = strlen(host);
-			if (hlen > 254) hlen = 254;
-			prefs.hostname[0] = hlen;
-			memcpy(prefs.hostname + 1, host, hlen);
-		}
-
-		if (port)
-		{
-			int plen = strlen(port);
+			plen = strlen(port);
 			if (plen > 254) plen = 254;
 			prefs.port[0] = plen;
 			memcpy(prefs.port + 1, port, plen);
 		}
 		else
 		{
-			/* default port 22 */
 			prefs.port[0] = 2;
 			prefs.port[1] = '2';
 			prefs.port[2] = '2';
 		}
+		plen = (unsigned char)prefs.port[0];
 
+		/* hostname holds "host:port" as a C string after the length byte */
+		hlen = strlen(host);
+		if (hlen > 250 - plen) hlen = 250 - plen;
+		memset(prefs.hostname, 0, sizeof(prefs.hostname));
+		prefs.hostname[0] = hlen;
+		memcpy(prefs.hostname + 1, host, hlen);
+		prefs.hostname[hlen + 1] = ':';
+		memcpy(prefs.hostname + hlen + 2, prefs.port + 1, plen);
+
+		/* skip the dialog when we know who to log in as */
+		skip_dialog = (prefs.username[0] != 0);
 	}
 
-	/* intro_dialog() will build the combined "hostname:port" C string */
+	ssh_skip_connect_dialog = skip_dialog;
 	{
 		struct window_context* wc = window_for_session(idx);
 		if (wc) new_session(wc, SESSION_SSH);
 	}
+	ssh_skip_connect_dialog = 0;
 }
 
 static void cmd_telnet(int idx, int argc, char* argv[])

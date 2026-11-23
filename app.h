@@ -285,6 +285,9 @@ pascal Boolean TwoItemFilter(DialogPtr dlog, EventRecord *event, short *itemHit)
 int password_dialog(int dialog_resource);
 int key_dialog(void);
 
+/* set by the shell's "ssh user@host": connect without the Connect dialog */
+extern int ssh_skip_connect_dialog;
+
 // session management
 int new_session(struct window_context* wc, enum SESSION_TYPE type);
 void close_session(int idx);
