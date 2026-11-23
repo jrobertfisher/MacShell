@@ -12293,6 +12293,10 @@ void shell_prompt(int idx)
 	char esc[20];
 	int c = prefs.prompt_color;
 
+	/* a one-off command run for ssh: no prompt when it finishes */
+	if (s->sshd_exec && s->keygen_stage == 0 && s->ftp_mode == FTP_MODE_OFF)
+		return;
+
 	if (s->keygen_stage == 1) { vt_write(idx, "Enter passphrase (empty for no passphrase): "); return; }
 	if (s->keygen_stage == 2) { vt_write(idx, "Enter same passphrase again: "); return; }
 
