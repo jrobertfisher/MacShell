@@ -2582,10 +2582,56 @@ static int key_file_needs_passphrase(const char* path)
 	return strstr(buf, "PRIVATE KEY-----") == NULL;   /* not a key we recognise: ask */
 }
 
+/* full path of a file in Documents:.ssh on the startup disk, if it exists */
+static char* default_key_path(const char* name)
+{
+	short vref;
+	long dir;
+	Str255 pn;
+	FSSpec spec;
+	Handle full_path = NULL;
+	int path_length = 0;
+	char* out;
+	int n = strlen(name);
+
+	if (!ssh_key_folder(&vref, &dir, 0)) return NULL;
+	pn[0] = n;
+	memcpy(pn + 1, name, n);
+	if (FSMakeFSSpec(vref, dir, pn, &spec) != noErr) return NULL;
+	if (FSpPathFromLocation(&spec, &path_length, &full_path) != noErr ||
+	    full_path == NULL || path_length <= 0)
+	{
+		if (full_path) DisposeHandle(full_path);
+		return NULL;
+	}
+	out = malloc(path_length + 1);
+	if (out) { memcpy(out, *full_path, path_length); out[path_length] = '\0'; }
+	DisposeHandle(full_path);
+	return out;
+}
+
 int key_dialog(void)
 {
 	Handle full_path = NULL;
 	int path_length = 0;
+
+	/* like OpenSSH's ~/.ssh/id_ecdsa: use Documents:.ssh:id_ecdsa if no key is chosen yet */
+	if ((prefs.pubkey_path == NULL || prefs.pubkey_path[0] == '\0') &&
+	    (prefs.privkey_path == NULL || prefs.privkey_path[0] == '\0'))
+	{
+		char* pub = default_key_path("id_ecdsa.pub");
+		char* priv = pub ? default_key_path("id_ecdsa") : NULL;
+		if (pub && priv)
+		{
+			prefs.pubkey_path = pub;
+			prefs.privkey_path = priv;
+		}
+		else
+		{
+			free(pub);
+			free(priv);
+		}
+	}
 
 	// if we don't have a saved pubkey path, ask for one
 	if (prefs.pubkey_path == NULL || prefs.pubkey_path[0] == '\0')

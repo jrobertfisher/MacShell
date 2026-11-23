@@ -8345,6 +8345,42 @@ static void ftp_interactive_open(int idx, const char* spec, int active)
 #include <mbedtls/base64.h>
 #include <mbedtls/platform_util.h>
 
+/* folder dirID of name inside parent; creates it if asked */
+static int sub_folder(short vRefNum, long parent, const char* name, int create, long* dirID)
+{
+	CInfoPBRec pb;
+	Str255 pn;
+	OSErr err;
+	int n = strlen(name);
+
+	pn[0] = n;
+	memcpy(pn + 1, name, n);
+	memset(&pb, 0, sizeof pb);
+	pb.dirInfo.ioNamePtr = pn;
+	pb.dirInfo.ioVRefNum = vRefNum;
+	pb.dirInfo.ioDrDirID = parent;
+	err = PBGetCatInfoSync(&pb);
+	if (err == noErr)
+	{
+		if (!(pb.dirInfo.ioFlAttrib & 0x10)) return 0;      /* a file, not a folder */
+		*dirID = pb.dirInfo.ioDrDirID;
+		return 1;
+	}
+	if (err != fnfErr || !create) return 0;
+	return DirCreate(vRefNum, parent, pn, dirID) == noErr;
+}
+
+int ssh_key_folder(short* vRefNum, long* dirID, int create)
+{
+	long sys_dir, docs;
+	/* the startup volume is the one holding the active System Folder */
+	if (FindFolder(kOnSystemDisk, kSystemFolderType, kDontCreateFolder, vRefNum, &sys_dir) != noErr)
+		return 0;
+	if (!sub_folder(*vRefNum, fsRtDirID, "Documents", create, &docs))
+		return 0;
+	return sub_folder(*vRefNum, docs, ".ssh", create, dirID);
+}
+
 static int keygen_file_exists(int idx, const char* name)
 {
 	struct session* s = &sessions[idx];
@@ -8353,7 +8389,7 @@ static int keygen_file_exists(int idx, const char* name)
 	int n = strlen(name);
 	pn[0] = n;
 	memcpy(pn + 1, name, n);
-	return FSMakeFSSpec(s->shell_vRefNum, s->shell_dirID, pn, &tmp) != fnfErr;
+	return FSMakeFSSpec(s->keygen_vref, s->keygen_dir, pn, &tmp) != fnfErr;
 }
 
 static int keygen_write_file(int idx, const char* name, const unsigned char* data, long len)
@@ -8368,14 +8404,45 @@ static int keygen_write_file(int idx, const char* name, const unsigned char* dat
 
 	pn[0] = n;
 	memcpy(pn + 1, name, n);
-	if (HCreate(s->shell_vRefNum, s->shell_dirID, pn, 'ttxt', 'TEXT') != noErr)
+	if (HCreate(s->keygen_vref, s->keygen_dir, pn, 'ttxt', 'TEXT') != noErr)
 		return 0;
-	FSMakeFSSpec(s->shell_vRefNum, s->shell_dirID, pn, &spec);
+	FSMakeFSSpec(s->keygen_vref, s->keygen_dir, pn, &spec);
 	if (FSpOpenDF(&spec, fsRdWrPerm, &ref) != noErr)
 		return 0;
 	err = FSWrite(ref, &count, data);
 	FSClose(ref);
 	return err == noErr && count == len;
+}
+
+/* "Volume:Folder:Sub:" for showing where the keys went */
+static void keygen_folder_path(short vRefNum, long dirID, char* out, int size)
+{
+	char parts[8][64];
+	int n = 0, i;
+	long d = dirID;
+	out[0] = '\0';
+	while (n < 8)
+	{
+		CInfoPBRec pb;
+		Str255 name;
+		memset(&pb, 0, sizeof pb);
+		name[0] = 0;
+		pb.dirInfo.ioNamePtr = name;
+		pb.dirInfo.ioVRefNum = vRefNum;
+		pb.dirInfo.ioFDirIndex = -1;
+		pb.dirInfo.ioDrDirID = d;
+		if (PBGetCatInfoSync(&pb) != noErr) break;
+		memcpy(parts[n], name + 1, name[0]);
+		parts[n][name[0]] = '\0';
+		n++;
+		if (d == fsRtDirID) break;
+		d = pb.dirInfo.ioDrParID;
+	}
+	for (i = n - 1; i >= 0; i--)
+	{
+		strncat(out, parts[i], size - strlen(out) - 2);
+		strcat(out, ":");
+	}
 }
 
 static void put_u32(unsigned char* p, unsigned long v)
@@ -8527,9 +8594,13 @@ static void keygen_run(int idx)
 	while (fp_len > 0 && fp[fp_len - 1] == '=') fp_len--;
 	fp[fp_len] = '\0';
 
-	printf_s(idx, "Private key saved to %s%s\r\n", s->keygen_name,
-	         s->keygen_pass[0] ? " (encrypted with your passphrase)" : " (no passphrase)");
-	printf_s(idx, "Public key saved to %s\r\n", pub_name);
+	{
+		char where[300];
+		keygen_folder_path(s->keygen_vref, s->keygen_dir, where, sizeof where);
+		printf_s(idx, "Private key saved to %s%s%s\r\n", where, s->keygen_name,
+		         s->keygen_pass[0] ? " (encrypted with your passphrase)" : " (no passphrase)");
+		printf_s(idx, "Public key saved to %s%s\r\n", where, pub_name);
+	}
 	printf_s(idx, "Fingerprint: SHA256:%s %s\r\n\r\n", fp, s->keygen_comment);
 	vt_write(idx, "Add this line to ~/.ssh/authorized_keys on the server:\r\n");
 	pub[pub_len - 1] = '\0';
@@ -8581,11 +8652,12 @@ static void cmd_ssh_keygen(int idx, int argc, char* argv[])
 	struct session* s = &sessions[idx];
 	const char* name = "id_ecdsa";
 	const char* comment = "MacShell";
+	int in_current_folder = 0;
 	int i;
 
 	for (i = 1; i < argc; i++)
 	{
-		if (!strcmp(argv[i], "-f") && i + 1 < argc) name = argv[++i];
+		if (!strcmp(argv[i], "-f") && i + 1 < argc) { name = argv[++i]; in_current_folder = 1; }
 		else if (!strcmp(argv[i], "-C") && i + 1 < argc) comment = argv[++i];
 		else if (!strcmp(argv[i], "-t") && i + 1 < argc)
 		{
@@ -8606,7 +8678,8 @@ static void cmd_ssh_keygen(int idx, int argc, char* argv[])
 		else
 		{
 			vt_write(idx, "usage: ssh-keygen [-f name] [-C comment]\r\n"
-			              "  makes an ECDSA P-256 key pair: name (private) and name.pub (public)\r\n");
+			              "  makes an ECDSA P-256 key pair, saved as id_ecdsa and id_ecdsa.pub in\r\n"
+			              "  Documents:.ssh on the startup disk; -f name saves in the current folder\r\n");
 			return;
 		}
 	}
@@ -8618,6 +8691,16 @@ static void cmd_ssh_keygen(int idx, int argc, char* argv[])
 	if (!macentropy_get_stats()->ready)
 	{
 		vt_write(idx, "ssh-keygen: not enough randomness yet; type 'entropy' for details\r\n");
+		return;
+	}
+	if (in_current_folder)
+	{
+		s->keygen_vref = s->shell_vRefNum;
+		s->keygen_dir = s->shell_dirID;
+	}
+	else if (!ssh_key_folder(&s->keygen_vref, &s->keygen_dir, 1))
+	{
+		vt_write(idx, "ssh-keygen: cannot find or create Documents:.ssh on the startup disk\r\n");
 		return;
 	}
 	copy_cstr_trunc(s->keygen_name, sizeof s->keygen_name, name);
@@ -8632,7 +8715,11 @@ static void cmd_ssh_keygen(int idx, int argc, char* argv[])
 			return;
 		}
 	}
-	printf_s(idx, "Making a key pair in this folder: %s and %s.pub\r\n", name, name);
+	{
+		char where[300];
+		keygen_folder_path(s->keygen_vref, s->keygen_dir, where, sizeof where);
+		printf_s(idx, "Making a key pair in %s: %s and %s.pub\r\n", where, name, name);
+	}
 	memset(s->keygen_pass, 0, sizeof s->keygen_pass);
 	s->keygen_stage = 1;
 	s->hide_input = 1;

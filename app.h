@@ -152,6 +152,8 @@ struct session
 	char keygen_pass[128];
 	char keygen_name[32];
 	char keygen_comment[64];
+	short keygen_vref;           /* folder the key files go in */
+	long keygen_dir;
 	char ftp_user[256];
 	char ftp_password[256];
 	unsigned short ftp_port;          /* default 21 */
