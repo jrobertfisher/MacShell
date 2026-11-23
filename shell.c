@@ -5491,7 +5491,20 @@ static int check_macbinary(const unsigned char* hdr, int hdr_len,
 	name_len = hdr[1];
 	if (name_len < 1 || name_len > 63) return 0;
 	if (hdr[74] != 0) return 0;       /* must be zero */
-	if (hdr[82] != 0) return 0;       /* must be zero */
+	if (hdr[122] >= 129 || hdr[124] != 0 || hdr[125] != 0)
+	{
+		/* MacBinary II/III: the header CRC (CRC-16/XMODEM of bytes 0-123) must match */
+		unsigned short crc = 0;
+		int i, b;
+		for (i = 0; i < 124; i++)
+		{
+			crc ^= (unsigned short)hdr[i] << 8;
+			for (b = 0; b < 8; b++)
+				crc = (crc & 0x8000) ? (unsigned short)((crc << 1) ^ 0x1021) : (unsigned short)(crc << 1);
+		}
+		if (crc != (unsigned short)((hdr[124] << 8) | hdr[125])) return 0;
+	}
+	else if (hdr[82] != 0) return 0;  /* MacBinary I: must be zero */
 
 	/* data fork length (bytes 83-86, big-endian) */
 	*data_len = ((long)hdr[83] << 24) | ((long)hdr[84] << 16) |
@@ -5617,6 +5630,192 @@ static void wget_unique_name(short vRefNum, long dirID, char* name)
 		}
 	}
 	strcpy(name, cand);
+}
+
+/* ------------------------------------------------------------------ */
+/* MacBinary: unpack a downloaded .bin into a real Mac file           */
+/* ------------------------------------------------------------------ */
+
+static unsigned short macbin_crc16(const unsigned char* p, int n)
+{
+	unsigned short crc = 0;
+	int i, b;
+	for (i = 0; i < n; i++)
+	{
+		crc ^= (unsigned short)p[i] << 8;
+		for (b = 0; b < 8; b++)
+			crc = (crc & 0x8000) ? (unsigned short)((crc << 1) ^ 0x1021) : (unsigned short)(crc << 1);
+	}
+	return crc;
+}
+
+static unsigned long be32(const unsigned char* p)
+{
+	return ((unsigned long)p[0] << 24) | ((unsigned long)p[1] << 16) |
+	       ((unsigned long)p[2] << 8) | (unsigned long)p[3];
+}
+
+/* copy len bytes from src (at its current position) to dst */
+static OSErr macbin_copy(short src, short dst, long len, char* buf, long bufsize)
+{
+	OSErr err = noErr;
+	while (len > 0 && err == noErr)
+	{
+		long n = len < bufsize ? len : bufsize;
+		long got = n;
+		err = FSRead(src, &got, buf);
+		if (err == eofErr && got == n) err = noErr;
+		if (err != noErr || got != n) return err != noErr ? err : eofErr;
+		err = FSWrite(dst, &got, buf);
+		len -= n;
+		YieldToAnyThread();
+	}
+	return err;
+}
+
+/* If spec is a valid MacBinary (I, II or III) file, write its data and
+   resource forks to a new file named from the header (in the same folder),
+   with its type, creator, Finder flags and dates, then delete the .bin.
+   Returns 1 if unpacked. A .bin that can't be unpacked is given StuffIt
+   Expander's MacBinary type, so double-clicking it does the right thing. */
+static int macbinary_unpack(int idx, FSSpec* spec)
+{
+	unsigned char hdr[128];
+	char name[64], tmp_name[32];
+	Str255 pn;
+	FSSpec out;
+	short src = 0, dst = 0;
+	long count = 128, eof = 0, dlen, rlen, sec, data_off, rsrc_off;
+	int nlen, i, same_name, header_ok = 0;
+	char* buf = NULL;
+	OSErr err;
+	FInfo fi;
+	CInfoPBRec pb;
+
+	if (FSpOpenDF(spec, fsRdPerm, &src) != noErr) return 0;
+	err = FSRead(src, &count, hdr);
+	GetEOF(src, &eof);
+	if (err != noErr || count != 128) goto fail;
+
+	/* header checks */
+	if (hdr[0] != 0 || hdr[74] != 0 || hdr[1] < 1 || hdr[1] > 63) goto fail;
+	if (hdr[122] >= 129 || hdr[124] != 0 || hdr[125] != 0)
+	{
+		/* MacBinary II/III: the header CRC must match */
+		if (macbin_crc16(hdr, 124) != (unsigned short)((hdr[124] << 8) | hdr[125])) goto fail;
+	}
+	else if (hdr[82] != 0)
+		goto fail;
+	dlen = (long)be32(hdr + 83);
+	rlen = (long)be32(hdr + 87);
+	sec = (long)((hdr[120] << 8) | hdr[121]);
+	if (dlen < 0 || rlen < 0 || dlen > 0x7FFFFFF || rlen > 0x7FFFFFF) goto fail;
+	data_off = 128 + ((sec + 127) & ~127L);
+	rsrc_off = data_off + ((dlen + 127) & ~127L);
+	header_ok = 1;
+	if (eof < rsrc_off + rlen) goto fail;               /* truncated download */
+
+	/* name from the header, safe for HFS */
+	nlen = hdr[1];
+	if (nlen > 31) nlen = 31;
+	memcpy(name, hdr + 2, nlen);
+	name[nlen] = '\0';
+	for (i = 0; i < nlen; i++)
+		if (name[i] == ':' || (unsigned char)name[i] < 32) name[i] = '-';
+	if (name[0] == '.') name[0] = '_';                  /* leading '.' means a driver */
+
+	/* the new file must not replace anything; if it has the .bin's own
+	   name, write under a temporary name and rename after deleting the .bin */
+	same_name = (spec->name[0] == nlen && strncmp((char*)spec->name + 1, name, nlen) == 0);
+	copy_cstr_trunc(tmp_name, sizeof tmp_name, name);
+	wget_unique_name(spec->vRefNum, spec->parID, tmp_name);
+
+	pn[0] = strlen(tmp_name);
+	memcpy(pn + 1, tmp_name, pn[0]);
+	if (HCreate(spec->vRefNum, spec->parID, pn, be32(hdr + 69), be32(hdr + 65)) != noErr) goto fail;
+	FSMakeFSSpec(spec->vRefNum, spec->parID, pn, &out);
+
+	buf = NewPtr(8192);
+	if (buf == NULL) goto fail_out;
+
+	/* data fork */
+	if (dlen > 0)
+	{
+		if (FSpOpenDF(&out, fsRdWrPerm, &dst) != noErr) goto fail_out;
+		SetFPos(src, fsFromStart, data_off);
+		err = macbin_copy(src, dst, dlen, buf, 8192);
+		FSClose(dst);
+		dst = 0;
+		if (err != noErr) goto fail_out;
+	}
+	/* resource fork */
+	if (rlen > 0)
+	{
+		if (FSpOpenRF(&out, fsRdWrPerm, &dst) != noErr) goto fail_out;
+		SetFPos(src, fsFromStart, rsrc_off);
+		err = macbin_copy(src, dst, rlen, buf, 8192);
+		FSClose(dst);
+		dst = 0;
+		if (err != noErr) goto fail_out;
+	}
+	FSClose(src);
+	src = 0;
+
+	/* Finder info: type, creator, flags (not "inited", so the Finder places
+	   the icon and reads the bundle), and the original dates */
+	if (FSpGetFInfo(&out, &fi) == noErr)
+	{
+		unsigned short flags = (unsigned short)((hdr[73] << 8) | hdr[101]);
+		fi.fdType = be32(hdr + 65);
+		fi.fdCreator = be32(hdr + 69);
+		fi.fdFlags = flags & ~(0x0100 | 0x0001);         /* clear isInited, isOnDesk */
+		fi.fdLocation.h = 0;
+		fi.fdLocation.v = 0;
+		fi.fdFldr = 0;
+		FSpSetFInfo(&out, &fi);
+	}
+	memset(&pb, 0, sizeof pb);
+	pb.hFileInfo.ioNamePtr = out.name;
+	pb.hFileInfo.ioVRefNum = out.vRefNum;
+	pb.hFileInfo.ioDirID = out.parID;
+	if (PBGetCatInfoSync(&pb) == noErr)
+	{
+		pb.hFileInfo.ioFlCrDat = be32(hdr + 91);
+		pb.hFileInfo.ioFlMdDat = be32(hdr + 95);
+		pb.hFileInfo.ioDirID = out.parID;
+		PBSetCatInfoSync(&pb);
+	}
+
+	/* replace the .bin */
+	FSpDelete(spec);
+	if (same_name)
+	{
+		Str255 final_name;
+		final_name[0] = nlen;
+		memcpy(final_name + 1, name, nlen);
+		if (FSpRename(&out, final_name) == noErr)
+			copy_cstr_trunc(tmp_name, sizeof tmp_name, name);
+	}
+	DisposePtr(buf);
+	printf_s(idx, "MacBinary: unpacked to %s (data %ld, resource %ld bytes)\r\n",
+	         tmp_name, dlen, rlen);
+	return 1;
+
+fail_out:
+	if (dst) FSClose(dst);
+	FSpDelete(&out);
+	if (buf) DisposePtr(buf);
+fail:
+	if (src) FSClose(src);
+	if (header_ok && FSpGetFInfo(spec, &fi) == noErr)
+	{
+		/* leave it for StuffIt Expander */
+		fi.fdType = 'BINA';
+		fi.fdCreator = 'SITx';
+		FSpSetFInfo(spec, &fi);
+		vt_write(idx, "MacBinary: could not unpack; left as a .bin file for StuffIt Expander\r\n");
+	}
+	return 0;
 }
 
 static void extract_filename(const char* url_path, const char* headers,
@@ -6552,6 +6751,8 @@ wget_emit_initial:
 		else
 			printf_s(idx, "\r\n%ld bytes saved to %s (INCOMPLETE)\r\n",
 			         total_written, local_name);
+		if (download_ok && checked_macbinary)
+			macbinary_unpack(idx, &out_spec);
 
 		if (download_elapsed_ticks > 0)
 		{
@@ -7445,6 +7646,8 @@ static int ftp_download(int idx, EndpointRef ctrl_ep,
 	else
 		printf_s(idx, "%ld bytes saved to %s (INCOMPLETE)\r\n",
 		         total_written, local_name);
+	if (download_ok && checked_macbinary)
+		macbinary_unpack(idx, &out_spec);
 
 	if (download_elapsed_ticks > 0)
 	{
@@ -9556,7 +9759,22 @@ static void scp_download(int idx)
 	if (s->thread_command == EXIT)
 		printf_s(idx, "scp: cancelled\r\n");
 	else
+	{
+		OSType t, c;
+		long dl, rl;
 		printf_s(idx, "scp: downloaded %ld bytes -> %s\r\n", total_read, s->scp_local_path);
+		if (total_read > 0 && check_macbinary(first_bytes, first_bytes_len, &t, &c, &dl, &rl))
+		{
+			Str255 pn;
+			FSSpec sp;
+			int n = strlen(s->scp_local_path);
+			if (n > 31) n = 31;
+			pn[0] = n;
+			memcpy(pn + 1, s->scp_local_path, n);
+			if (FSMakeFSSpec(s->shell_vRefNum, s->shell_dirID, pn, &sp) == noErr)
+				macbinary_unpack(idx, &sp);
+		}
+	}
 
 	/* cleanup: caller owns connection after successful auth */
 	end_connection(idx);
