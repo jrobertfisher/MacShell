@@ -5675,9 +5675,8 @@ static OSErr macbin_copy(short src, short dst, long len, char* buf, long bufsize
 
 /* If spec is a valid MacBinary (I, II or III) file, write its data and
    resource forks to a new file named from the header (in the same folder),
-   with its type, creator, Finder flags and dates, then delete the .bin.
-   Returns 1 if unpacked. A .bin that can't be unpacked is given StuffIt
-   Expander's MacBinary type, so double-clicking it does the right thing. */
+   with its type, creator, Finder flags and dates. The .bin is kept, typed
+   as a MacBinary file for StuffIt Expander. Returns 1 if unpacked. */
 static int macbinary_unpack(int idx, FSSpec* spec)
 {
 	unsigned char hdr[128];
@@ -5686,7 +5685,7 @@ static int macbinary_unpack(int idx, FSSpec* spec)
 	FSSpec out;
 	short src = 0, dst = 0;
 	long count = 128, eof = 0, dlen, rlen, sec, data_off, rsrc_off;
-	int nlen, i, same_name, header_ok = 0;
+	int nlen, i, header_ok = 0;
 	char* buf = NULL;
 	OSErr err;
 	FInfo fi;
@@ -5724,9 +5723,7 @@ static int macbinary_unpack(int idx, FSSpec* spec)
 		if (name[i] == ':' || (unsigned char)name[i] < 32) name[i] = '-';
 	if (name[0] == '.') name[0] = '_';                  /* leading '.' means a driver */
 
-	/* the new file must not replace anything; if it has the .bin's own
-	   name, write under a temporary name and rename after deleting the .bin */
-	same_name = (spec->name[0] == nlen && strncmp((char*)spec->name + 1, name, nlen) == 0);
+	/* the new file must not replace anything (including the .bin itself) */
 	copy_cstr_trunc(tmp_name, sizeof tmp_name, name);
 	wget_unique_name(spec->vRefNum, spec->parID, tmp_name);
 
@@ -5786,15 +5783,12 @@ static int macbinary_unpack(int idx, FSSpec* spec)
 		PBSetCatInfoSync(&pb);
 	}
 
-	/* replace the .bin */
-	FSpDelete(spec);
-	if (same_name)
+	/* keep the .bin, as a MacBinary file rather than a broken copy of the app */
+	if (FSpGetFInfo(spec, &fi) == noErr)
 	{
-		Str255 final_name;
-		final_name[0] = nlen;
-		memcpy(final_name + 1, name, nlen);
-		if (FSpRename(&out, final_name) == noErr)
-			copy_cstr_trunc(tmp_name, sizeof tmp_name, name);
+		fi.fdType = 'BINA';
+		fi.fdCreator = 'SITx';
+		FSpSetFInfo(spec, &fi);
 	}
 	DisposePtr(buf);
 	printf_s(idx, "MacBinary: unpacked to %s (data %ld, resource %ld bytes)\r\n",
