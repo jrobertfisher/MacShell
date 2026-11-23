@@ -149,6 +149,10 @@ struct session
 	char ftp_cmdline[256];       /* command for the ftp worker thread */
 	int hide_input;              /* typing a password: no echo, no history */
 	int shell_at_root;           /* cwd is "/", the list of disks */
+	int shell_has_prev;          /* cd -: the previous folder */
+	int shell_prev_at_root;
+	short shell_prev_vRefNum;
+	long shell_prev_dirID;
 	int keygen_stage;            /* ssh-keygen: 1 = ask passphrase, 2 = confirm */
 	char keygen_pass[128];
 	char keygen_name[32];

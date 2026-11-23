@@ -70,6 +70,7 @@ MacShell uses Unix-style paths:
 * `/` lists the mounted disks; `/Macintosh HD/Documents` is a folder on the disk "Macintosh HD".
 * `~` is the Documents folder on the startup disk (the disk with the active System Folder),
   created if missing. MacShell starts there, and `cd` on its own returns there.
+* `cd -` goes back to the previous folder (and again to return).
 * `.` and `..` work as usual, including `..` from a disk's top level back to `/`.
 * Names with spaces need quotes or a backslash: `cd "/Macintosh HD/System Folder"`.
 * A `/` inside a Mac file name is shown and typed as `:` (as macOS does).

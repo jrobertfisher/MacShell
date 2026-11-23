@@ -1289,12 +1289,39 @@ static void cmd_cd(int idx, int argc, char* argv[])
 	FSSpec spec;
 	OSErr e;
 	const char* target = argc < 2 ? "~" : argv[1];
+	int old_root = s->shell_at_root;
+	short old_v = s->shell_vRefNum;
+	long old_d = s->shell_dirID;
+
+	/* cd - : back to the previous folder (and print it, as bash does) */
+	if (strcmp(target, "-") == 0)
+	{
+		char where[256];
+		if (!s->shell_has_prev)
+		{
+			vt_write(idx, "cd: no previous folder yet\r\n");
+			return;
+		}
+		s->shell_at_root = s->shell_prev_at_root;
+		s->shell_vRefNum = s->shell_prev_vRefNum;
+		s->shell_dirID = s->shell_prev_dirID;
+		s->shell_prev_at_root = old_root;
+		s->shell_prev_vRefNum = old_v;
+		s->shell_prev_dirID = old_d;
+		if (s->shell_at_root)
+			strcpy(where, "/");
+		else
+			display_path(s->shell_vRefNum, s->shell_dirID, where, sizeof where);
+		vt_write(idx, where);
+		vt_write(idx, "\r\n");
+		return;
+	}
 
 	/* cd / : the list of disks */
 	if (path_is_root(idx, target))
 	{
 		s->shell_at_root = 1;
-		return;
+		goto moved;
 	}
 
 	e = resolve_path_alias(idx, target, &spec);
@@ -1317,6 +1344,12 @@ static void cmd_cd(int idx, int argc, char* argv[])
 	s->shell_vRefNum = spec.vRefNum;
 	s->shell_dirID = get_dir_id(&spec);
 	s->shell_at_root = 0;
+
+moved:
+	s->shell_has_prev = 1;
+	s->shell_prev_at_root = old_root;
+	s->shell_prev_vRefNum = old_v;
+	s->shell_prev_dirID = old_d;
 }
 
 static void cmd_pwd(int idx, int argc, char* argv[])
@@ -11988,6 +12021,7 @@ void shell_init(int session_idx)
 
 	/* start in ~ (Documents on the startup disk), like a Unix shell */
 	s->shell_at_root = 0;
+	s->shell_has_prev = 0;
 	if (home_folder(&vRef, &dID))
 	{
 		s->shell_vRefNum = vRef;
