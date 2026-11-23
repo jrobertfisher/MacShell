@@ -273,118 +273,235 @@ static void get_dir_name(short vRefNum, long dirID, char* out, int maxlen)
 	}
 }
 
-/* build a full HFS path for the current directory */
+static int sub_folder(short vRefNum, long parent, const char* name, int create, long* dirID);
+static int is_directory(FSSpec* spec);
+static long get_dir_id(FSSpec* spec);
+
+/* Paths look like Unix: "/" lists the disks, "/Macintosh HD/Documents" is a
+   folder, and "~" is the Documents folder on the startup disk. A '/' inside
+   a Mac file name is shown as ':' (as macOS does), and typed back the same way.
+   An old-style Mac path with ':' and no '/' still works. */
+
+/* copy a Mac name to out, showing '/' as ':' */
+static void mac_name_to_unix(const unsigned char* pname, char* out, int size)
+{
+	int n = pname[0], i;
+	if (n > size - 1) n = size - 1;
+	for (i = 0; i < n; i++)
+		out[i] = pname[1 + i] == '/' ? ':' : (char)pname[1 + i];
+	out[n] = '\0';
+}
+
+/* "/Volume/Folder/Sub/" for a folder (always ends in '/') */
 static void get_full_path(short vRefNum, long dirID, char* out, int maxlen)
 {
-	/* walk parent chain and build path */
 	char parts[32][64];
-	int depth = 0;
-	CInfoPBRec pb;
-	Str255 name;
+	int depth = 0, i;
 	long curDir = dirID;
-	OSErr err;
 
 	while (depth < 32)
 	{
+		CInfoPBRec pb;
+		Str255 name;
 		memset(&pb, 0, sizeof(pb));
 		name[0] = 0;
 		pb.dirInfo.ioNamePtr = name;
 		pb.dirInfo.ioVRefNum = vRefNum;
 		pb.dirInfo.ioDrDirID = curDir;
 		pb.dirInfo.ioFDirIndex = -1;
-
-		err = PBGetCatInfoSync(&pb);
-		if (err != noErr) break;
-
-		{
-			int len = name[0];
-			if (len > 63) len = 63;
-			memcpy(parts[depth], name + 1, len);
-			parts[depth][len] = '\0';
-		}
+		if (PBGetCatInfoSync(&pb) != noErr) break;
+		mac_name_to_unix(name, parts[depth], sizeof parts[depth]);
 		depth++;
-
 		if (pb.dirInfo.ioDrDirID == fsRtDirID) break;
 		curDir = pb.dirInfo.ioDrParID;
 	}
 
-	/* assemble in reverse */
-	out[0] = '\0';
+	strcpy(out, "/");
+	for (i = depth - 1; i >= 0; i--)
 	{
-		int i;
-		for (i = depth - 1; i >= 0; i--)
+		if (strlen(out) + strlen(parts[i]) + 2 >= (size_t)maxlen) break;
+		strcat(out, parts[i]);
+		strcat(out, "/");
+	}
+}
+
+/* the home folder: Documents on the startup disk (created if missing) */
+static int home_folder(short* vRefNum, long* dirID)
+{
+	long sys_dir;
+	if (FindFolder(kOnSystemDisk, kSystemFolderType, kDontCreateFolder, vRefNum, &sys_dir) != noErr)
+		return 0;
+	return sub_folder(*vRefNum, fsRtDirID, "Documents", 1, dirID);
+}
+
+/* a folder path for showing: "~" or "~/sub" inside home, else the full path */
+static void display_path(short vRefNum, long dirID, char* out, int maxlen)
+{
+	char full[512], home[512];
+	short hv;
+	long hd;
+	int hl;
+
+	get_full_path(vRefNum, dirID, full, sizeof full);
+	if (home_folder(&hv, &hd))
+	{
+		get_full_path(hv, hd, home, sizeof home);
+		hl = strlen(home);
+		if (strncmp(full, home, hl) == 0)
 		{
-			if (strlen(out) + strlen(parts[i]) + 2 >= (size_t)maxlen) break;
-			strcat(out, parts[i]);
-			strcat(out, ":");
+			snprintf(out, maxlen, "~/%s", full + hl);
+			goto trim;
+		}
+	}
+	snprintf(out, maxlen, "%s", full);
+trim:
+	hl = strlen(out);
+	if (hl > 1 && out[hl - 1] == '/') out[hl - 1] = '\0';
+}
+
+/* find a mounted volume by name (case-insensitive) */
+static int find_volume(const char* name, short* vRefNum)
+{
+	short i;
+	Str255 want;
+	int n = strlen(name), k;
+	if (n > 27) return 0;
+	want[0] = n;
+	for (k = 0; k < n; k++) want[1 + k] = name[k] == ':' ? '/' : name[k];
+	for (i = 1; ; i++)
+	{
+		HParamBlockRec pb;
+		Str255 vname;
+		memset(&pb, 0, sizeof pb);
+		vname[0] = 0;
+		pb.volumeParam.ioNamePtr = vname;
+		pb.volumeParam.ioVolIndex = i;
+		if (PBHGetVInfoSync(&pb) != noErr) return 0;
+		if (EqualString(vname, want, false, true))
+		{
+			*vRefNum = pb.volumeParam.ioVRefNum;
+			return 1;
 		}
 	}
 }
 
-/* resolve a user-typed path (may use / as separator) to vRefNum+dirID+name.
-   returns noErr on success, populates spec. */
+/* Resolve a typed path to an FSSpec. Returns noErr (or fnfErr with spec
+   filled in for a name that doesn't exist yet, for creating files), and
+   paramErr for "/" itself, which isn't a real folder (see path_is_root). */
 static OSErr resolve_path(int idx, const char* path, FSSpec* spec)
 {
 	struct session* s = &sessions[idx];
-	Str255 pname;
-	char hfs_path[512];
-	int i, j;
+	char comps[64][64];
+	int ncomp = 0, i, at_root = 0;
+	short vref = s->shell_vRefNum;
+	long dir = s->shell_dirID;
+	const char* p = path;
 
 	if (path == NULL || path[0] == '\0')
 		return fnfErr;
 
-	/* strip leading "./" — HFS has no "." for current directory */
-	while (path[0] == '.' && path[1] == '/')
-		path += 2;
-
-	/* bare "." means current directory */
-	if (path[0] == '.' && path[1] == '\0')
-		return FSMakeFSSpec(s->shell_vRefNum, s->shell_dirID, "\p", spec);
-
-	/* convert / to : for HFS, handle leading / as volume root */
-	j = 0;
-	for (i = 0; path[i] != '\0' && j < 510; i++)
+	/* an old-style Mac path ("Disk:Folder:File" or ":Sub:File") */
+	if (strchr(path, ':') != NULL && strchr(path, '/') == NULL && path[0] != '~')
 	{
-		if (path[i] == '/')
-			hfs_path[j++] = ':';
-		else
-			hfs_path[j++] = path[i];
-	}
-	hfs_path[j] = '\0';
-
-	/* handle ".." -> parent */
-	if (strcmp(hfs_path, "..") == 0)
-		strcpy(hfs_path, "::");
-
-	/* strip trailing : unless the path IS just ":" or "::" */
-	{
-		int plen = strlen(hfs_path);
-		if (plen > 1 && hfs_path[plen - 1] == ':' && strcmp(hfs_path, "::") != 0)
-			hfs_path[--plen] = '\0';
-	}
-
-	/* if the path contains a colon but doesn't start with one, it would be
-	   treated by FSMakeFSSpec as a FULL path (volume:folder:file) instead of
-	   relative.  prepend ':' to make it a relative partial path. */
-	if (hfs_path[0] != ':' && strchr(hfs_path, ':') != NULL)
-	{
-		int plen = strlen(hfs_path);
-		if (plen < 510)
-		{
-			memmove(hfs_path + 1, hfs_path, plen + 1);
-			hfs_path[0] = ':';
-		}
-	}
-
-	/* convert to pascal string */
-	{
-		int len = strlen(hfs_path);
+		Str255 pname;
+		int len = strlen(path);
 		if (len > 255) len = 255;
 		pname[0] = len;
-		memcpy(pname + 1, hfs_path, len);
+		memcpy(pname + 1, path, len);
+		return FSMakeFSSpec(s->shell_at_root ? 0 : vref, s->shell_at_root ? 0 : dir, pname, spec);
 	}
 
-	return FSMakeFSSpec(s->shell_vRefNum, s->shell_dirID, pname, spec);
+	if (p[0] == '/')
+	{
+		at_root = 1;
+		p++;
+	}
+	else if (p[0] == '~' && (p[1] == '\0' || p[1] == '/'))
+	{
+		if (!home_folder(&vref, &dir)) return dirNFErr;
+		p++;
+	}
+	else if (s->shell_at_root)
+		at_root = 1;
+
+	/* split into components; ':' in a name means a Mac '/' */
+	while (*p)
+	{
+		int n = 0;
+		while (*p == '/') p++;
+		if (*p == '\0') break;
+		if (ncomp >= 64) return bdNamErr;
+		while (*p && *p != '/')
+		{
+			if (n < 63) comps[ncomp][n++] = (*p == ':') ? '/' : *p;
+			p++;
+		}
+		comps[ncomp][n] = '\0';
+		ncomp++;
+	}
+
+	for (i = 0; i < ncomp; i++)
+	{
+		const char* c = comps[i];
+		int last = (i == ncomp - 1);
+		Str255 pn;
+		FSSpec sp;
+		OSErr err;
+
+		if (strcmp(c, ".") == 0)
+			continue;
+		if (strcmp(c, "..") == 0)
+		{
+			if (at_root) continue;
+			if (dir == fsRtDirID) { at_root = 1; continue; }
+			{
+				CInfoPBRec pb;
+				Str255 nm;
+				memset(&pb, 0, sizeof pb);
+				nm[0] = 0;
+				pb.dirInfo.ioNamePtr = nm;
+				pb.dirInfo.ioVRefNum = vref;
+				pb.dirInfo.ioDrDirID = dir;
+				pb.dirInfo.ioFDirIndex = -1;
+				if (PBGetCatInfoSync(&pb) != noErr) return dirNFErr;
+				dir = pb.dirInfo.ioDrParID;
+			}
+			continue;
+		}
+		if (at_root)
+		{
+			if (!find_volume(c, &vref)) return nsvErr;
+			dir = fsRtDirID;
+			at_root = 0;
+			continue;
+		}
+		if (strlen(c) > 31) return bdNamErr;
+		pn[0] = strlen(c);
+		memcpy(pn + 1, c, pn[0]);
+		if (last)
+			return FSMakeFSSpec(vref, dir, pn, spec);
+		err = FSMakeFSSpec(vref, dir, pn, &sp);
+		if (err != noErr) return err == fnfErr ? dirNFErr : err;
+		{
+			Boolean is_folder, was_alias;
+			ResolveAliasFile(&sp, true, &is_folder, &was_alias);
+		}
+		if (!is_directory(&sp)) return dirNFErr;
+		vref = sp.vRefNum;
+		dir = get_dir_id(&sp);
+	}
+
+	if (at_root)
+		return paramErr;                                  /* "/" */
+	return FSMakeFSSpec(vref, dir, "\p", spec);           /* the folder itself */
+}
+
+/* is this path "/" (the list of disks)? */
+static int path_is_root(int idx, const char* path)
+{
+	FSSpec sp;
+	if (path == NULL || path[0] == '\0') return sessions[idx].shell_at_root;
+	return resolve_path(idx, path, &sp) == paramErr;
 }
 
 /* Resolve path and follow Finder aliases.  Like resolve_path but also
@@ -597,7 +714,7 @@ static int glob_resolve_dir(int idx, const char* target,
 	short* out_vRef, long* out_dID, const char** out_pattern)
 {
 	struct session* s = &sessions[idx];
-	const char* last_sep = strrchr(target, ':');
+	const char* last_sep = strrchr(target, '/');
 	if (last_sep)
 	{
 		char dir_path[256];
@@ -694,7 +811,7 @@ static void cmd_ls_glob(int idx, const char* target, int long_fmt,
 			else
 			{
 				/* short format: prefix with parent path */
-				const char* last_sep = strrchr(target, ':');
+				const char* last_sep = strrchr(target, '/');
 				if (last_sep)
 				{
 					char prefix[256];
@@ -725,11 +842,11 @@ static void cmd_ls_glob(int idx, const char* target, int long_fmt,
 			vt_write(idx, "\r\n");
 			/* include parent path prefix from glob target */
 			{
-				const char* last_sep = strrchr(target, ':');
+				const char* last_sep = strrchr(target, '/');
 				if (last_sep)
 				{
 					char prefix[256];
-					int plen = (int)(last_sep - target) + 1; /* include the : */
+					int plen = (int)(last_sep - target) + 1; /* include the / */
 					if (plen > 255) plen = 255;
 					memcpy(prefix, target, plen);
 					prefix[plen] = '\0';
@@ -1013,6 +1130,44 @@ static int is_glob(const char* s)
 	return strchr(s, '*') != NULL || strchr(s, '?') != NULL;
 }
 
+/* ls /: the mounted disks */
+static void ls_show_volumes(int idx, int long_fmt)
+{
+	short i;
+	for (i = 1; ; i++)
+	{
+		HParamBlockRec pb;
+		Str255 vname;
+		char name[64];
+		memset(&pb, 0, sizeof pb);
+		vname[0] = 0;
+		pb.volumeParam.ioNamePtr = vname;
+		pb.volumeParam.ioVolIndex = i;
+		if (PBHGetVInfoSync(&pb) != noErr) break;
+		mac_name_to_unix(vname, name, sizeof name);
+		if (long_fmt)
+		{
+			unsigned long blk = pb.volumeParam.ioVAlBlkSiz;
+			unsigned long total_k = (unsigned long)pb.volumeParam.ioVNmAlBlks * (blk / 512) / 2;
+			unsigned long free_k = (unsigned long)pb.volumeParam.ioVFrBlk * (blk / 512) / 2;
+			printf_s(idx, "%s%s%s/  %lu K, %lu K free%s\r\n", ls_use_color ? "\033[1;34m" : "", name,
+			         ls_use_color ? "\033[0m" : "", total_k, free_k,
+			         (pb.volumeParam.ioVAtrb & 0x8080) ? ", locked" : "");
+		}
+		else
+			printf_s(idx, "%s%s%s/\r\n", ls_use_color ? "\033[1;34m" : "", name, ls_use_color ? "\033[0m" : "");
+	}
+}
+
+static int ls_only_path_is_root(int idx, int argc, char* argv[])
+{
+	int i;
+	for (i = 1; i < argc; i++)
+		if (argv[i][0] != '-' || argv[i][1] == '\0')
+			return path_is_root(idx, argv[i]);
+	return 0;
+}
+
 static void cmd_ls(int idx, int argc, char* argv[])
 {
 	struct session* s = &sessions[idx];
@@ -1044,6 +1199,11 @@ static void cmd_ls(int idx, int argc, char* argv[])
 		}
 	}
 
+	if ((path_count == 0 && s->shell_at_root) || (path_count == 1 && ls_only_path_is_root(idx, argc, argv)))
+	{
+		ls_show_volumes(idx, long_fmt);
+		return;
+	}
 	if (path_count == 0)
 	{
 		ls_show_dir(idx, s->shell_vRefNum, s->shell_dirID, long_fmt, show_all);
@@ -1126,71 +1286,37 @@ static void cmd_ls(int idx, int argc, char* argv[])
 static void cmd_cd(int idx, int argc, char* argv[])
 {
 	struct session* s = &sessions[idx];
-
-	if (argc < 2)
-	{
-		/* cd with no args goes to system disk root */
-		short vRef;
-		long dID;
-		if (FindFolder(kOnSystemDisk, kDesktopFolderType, kDontCreateFolder, &vRef, &dID) == noErr)
-		{
-			s->shell_vRefNum = vRef;
-			s->shell_dirID = fsRtDirID;
-		}
-		return;
-	}
-
 	FSSpec spec;
-	OSErr e = resolve_path_alias(idx, argv[1], &spec);
+	OSErr e;
+	const char* target = argc < 2 ? "~" : argv[1];
 
-	/* fnfErr with parID set means the parent exists but name doesn't,
-	   but for ".." resolve_path returns "::" which FSMakeFSSpec handles */
-	if (e == fnfErr)
+	/* cd / : the list of disks */
+	if (path_is_root(idx, target))
 	{
-		/* check if it resolves to parent via "::" */
-		if (strcmp(argv[1], "..") == 0)
-		{
-			CInfoPBRec pb;
-			Str255 name;
-			memset(&pb, 0, sizeof(pb));
-			name[0] = 0;
-			pb.dirInfo.ioNamePtr = name;
-			pb.dirInfo.ioVRefNum = s->shell_vRefNum;
-			pb.dirInfo.ioDrDirID = s->shell_dirID;
-			pb.dirInfo.ioFDirIndex = -1;
-
-			if (PBGetCatInfoSync(&pb) == noErr)
-			{
-				if (pb.dirInfo.ioDrDirID != fsRtDirID)
-				{
-					s->shell_dirID = pb.dirInfo.ioDrParID;
-				}
-			}
-			return;
-		}
-
-		vt_write(idx, "cd: no such directory: ");
-		vt_write(idx, argv[1]);
-		vt_write(idx, "\r\n");
+		s->shell_at_root = 1;
 		return;
 	}
 
+	e = resolve_path_alias(idx, target, &spec);
+	if (e == fnfErr || e == dirNFErr || e == nsvErr)
+	{
+		printf_s(idx, "cd: no such directory: %s\r\n", target);
+		return;
+	}
 	if (e != noErr)
 	{
-		vt_write(idx, "cd: error accessing path\r\n");
+		printf_s(idx, "cd: cannot open %s (error %d)\r\n", target, (int)e);
 		return;
 	}
-
 	if (!is_directory(&spec))
 	{
-		vt_write(idx, "cd: not a directory: ");
-		vt_write(idx, argv[1]);
-		vt_write(idx, "\r\n");
+		printf_s(idx, "cd: not a directory: %s\r\n", target);
 		return;
 	}
 
 	s->shell_vRefNum = spec.vRefNum;
 	s->shell_dirID = get_dir_id(&spec);
+	s->shell_at_root = 0;
 }
 
 static void cmd_pwd(int idx, int argc, char* argv[])
@@ -1198,7 +1324,15 @@ static void cmd_pwd(int idx, int argc, char* argv[])
 	struct session* s = &sessions[idx];
 	char path[1024];
 
-	get_full_path(s->shell_vRefNum, s->shell_dirID, path, sizeof(path));
+	if (s->shell_at_root)
+		strcpy(path, "/");
+	else
+	{
+		int n;
+		get_full_path(s->shell_vRefNum, s->shell_dirID, path, sizeof(path));
+		n = strlen(path);
+		if (n > 1 && path[n - 1] == '/') path[n - 1] = '\0';
+	}
 	vt_write(idx, path);
 	vt_write(idx, "\r\n");
 }
@@ -8785,35 +8919,11 @@ static int keygen_write_file(int idx, const char* name, const unsigned char* dat
 	return err == noErr && count == len;
 }
 
-/* "Volume:Folder:Sub:" for showing where the keys went */
+/* "~/.ssh/" or "/Volume/Folder/" for showing where the keys went */
 static void keygen_folder_path(short vRefNum, long dirID, char* out, int size)
 {
-	char parts[8][64];
-	int n = 0, i;
-	long d = dirID;
-	out[0] = '\0';
-	while (n < 8)
-	{
-		CInfoPBRec pb;
-		Str255 name;
-		memset(&pb, 0, sizeof pb);
-		name[0] = 0;
-		pb.dirInfo.ioNamePtr = name;
-		pb.dirInfo.ioVRefNum = vRefNum;
-		pb.dirInfo.ioFDirIndex = -1;
-		pb.dirInfo.ioDrDirID = d;
-		if (PBGetCatInfoSync(&pb) != noErr) break;
-		memcpy(parts[n], name + 1, name[0]);
-		parts[n][name[0]] = '\0';
-		n++;
-		if (d == fsRtDirID) break;
-		d = pb.dirInfo.ioDrParID;
-	}
-	for (i = n - 1; i >= 0; i--)
-	{
-		strncat(out, parts[i], size - strlen(out) - 2);
-		strcat(out, ":");
-	}
+	display_path(vRefNum, dirID, out, size - 1);
+	strcat(out, "/");
 }
 
 static void put_u32(unsigned char* p, unsigned long v)
@@ -11041,6 +11151,31 @@ static const char* shell_commands[] = {
 };
 #define NUM_SHELL_COMMANDS (sizeof(shell_commands) / sizeof(shell_commands[0]))
 
+/* one entry of a folder (or of the disk list) for tab completion */
+static OSErr comp_entry(int vol_mode, short vRef, long dirID, short index, Str255 name)
+{
+	if (vol_mode)
+	{
+		HParamBlockRec vp;
+		memset(&vp, 0, sizeof vp);
+		name[0] = 0;
+		vp.volumeParam.ioNamePtr = name;
+		vp.volumeParam.ioVolIndex = index;
+		return PBHGetVInfoSync(&vp);
+	}
+	else
+	{
+		CInfoPBRec pb;
+		memset(&pb, 0, sizeof pb);
+		name[0] = 0;
+		pb.hFileInfo.ioNamePtr = name;
+		pb.hFileInfo.ioVRefNum = vRef;
+		pb.hFileInfo.ioDirID = dirID;
+		pb.hFileInfo.ioFDirIndex = index;
+		return PBGetCatInfoSync(&pb);
+	}
+}
+
 static void shell_complete(int idx)
 {
 	struct session* s = &sessions[idx];
@@ -11272,9 +11407,10 @@ static void shell_complete(int idx)
 		}
 	}
 
-	/* split word into directory part and filename prefix at last : or / */
+	/* split word into directory part and filename prefix at the last / */
 	short comp_vRef = s->shell_vRefNum;
 	long comp_dID = s->shell_dirID;
+	int vol_mode = s->shell_at_root;     /* completing a disk name */
 	char prefix[256];
 	int prefix_len;
 	int dir_part_len = 0; /* length of dir prefix in UNESCAPED word */
@@ -11284,7 +11420,7 @@ static void shell_complete(int idx)
 		int wi;
 		for (wi = 0; wi < word_len; wi++)
 		{
-			if (word[wi] == ':' || word[wi] == '/')
+			if (word[wi] == '/')
 				last_sep = wi;
 		}
 
@@ -11297,10 +11433,17 @@ static void shell_complete(int idx)
 			dir_part_len = last_sep + 1;
 
 			FSSpec dir_spec;
-			OSErr e = resolve_path_alias(idx, dir_path, &dir_spec);
-			if (e != noErr || !is_directory(&dir_spec)) return;
-			comp_vRef = dir_spec.vRefNum;
-			comp_dID = get_dir_id(&dir_spec);
+			OSErr e;
+			if (path_is_root(idx, last_sep == 0 ? "/" : dir_path))
+				vol_mode = 1;
+			else
+			{
+				e = resolve_path_alias(idx, dir_path, &dir_spec);
+				if (e != noErr || !is_directory(&dir_spec)) return;
+				comp_vRef = dir_spec.vRefNum;
+				comp_dID = get_dir_id(&dir_spec);
+				vol_mode = 0;
+			}
 
 			prefix_len = word_len - dir_part_len;
 			memcpy(prefix, word + dir_part_len, prefix_len);
@@ -11324,21 +11467,11 @@ static void shell_complete(int idx)
 
 	for (index = 1; ; index++)
 	{
-		memset(&pb, 0, sizeof(pb));
-		name[0] = 0;
-		pb.hFileInfo.ioNamePtr = name;
-		pb.hFileInfo.ioVRefNum = comp_vRef;
-		pb.hFileInfo.ioDirID = comp_dID;
-		pb.hFileInfo.ioFDirIndex = index;
-
-		if (PBGetCatInfoSync(&pb) != noErr) break;
+		if (comp_entry(vol_mode, comp_vRef, comp_dID, index, name) != noErr) break;
 
 		char name_c[256];
 		{
-			int nl = name[0];
-			if (nl > 255) nl = 255;
-			memcpy(name_c, name + 1, nl);
-			name_c[nl] = '\0';
+			mac_name_to_unix(name, name_c, sizeof name_c);
 		}
 
 		/* case-insensitive prefix match (using unescaped prefix) */
@@ -11436,8 +11569,8 @@ static void shell_complete(int idx)
 		}
 
 		FSSpec spec;
-		OSErr e = resolve_path_alias(idx, full_match, &spec);
-		if (e == noErr && is_directory(&spec))
+		OSErr e = vol_mode ? noErr : resolve_path_alias(idx, full_match, &spec);
+		if (e == noErr && (vol_mode || is_directory(&spec)))
 		{
 			int cur = s->shell_cursor_pos;
 			int tail2 = s->shell_line_len - cur;
@@ -11445,7 +11578,7 @@ static void shell_complete(int idx)
 			{
 				if (tail2 > 0)
 					memmove(line + cur + 1, line + cur, tail2);
-				line[cur] = ':';
+				line[cur] = '/';
 				s->shell_line_len++;
 				s->shell_cursor_pos++;
 				line[s->shell_line_len] = '\0';
@@ -11469,21 +11602,11 @@ static void shell_complete(int idx)
 
 		for (index = 1; ; index++)
 		{
-			memset(&pb, 0, sizeof(pb));
-			name[0] = 0;
-			pb.hFileInfo.ioNamePtr = name;
-			pb.hFileInfo.ioVRefNum = comp_vRef;
-			pb.hFileInfo.ioDirID = comp_dID;
-			pb.hFileInfo.ioFDirIndex = index;
-
-			if (PBGetCatInfoSync(&pb) != noErr) break;
+			if (comp_entry(vol_mode, comp_vRef, comp_dID, index, name) != noErr) break;
 
 			char name_c[256];
 			{
-				int nl = name[0];
-				if (nl > 255) nl = 255;
-				memcpy(name_c, name + 1, nl);
-				name_c[nl] = '\0';
+				mac_name_to_unix(name, name_c, sizeof name_c);
 			}
 
 			if (prefix_len > 0)
@@ -11767,7 +11890,7 @@ static void shell_execute(int idx, char* line)
 void shell_prompt(int idx)
 {
 	struct session* s = &sessions[idx];
-	char dirname[64];
+	char dirname[256];
 	char esc[20];
 	int c = prefs.prompt_color;
 
@@ -11783,7 +11906,10 @@ void shell_prompt(int idx)
 		default: break;
 	}
 
-	get_dir_name(s->shell_vRefNum, s->shell_dirID, dirname, sizeof(dirname));
+	if (s->shell_at_root)
+		strcpy(dirname, "/");
+	else
+		display_path(s->shell_vRefNum, s->shell_dirID, dirname, sizeof(dirname));
 
 	/* 0 = plain (the default) */
 	if (c <= 0 || c > 15)
@@ -11860,8 +11986,14 @@ void shell_init(int session_idx)
 	short vRef;
 	long dID;
 
-	/* start in the system disk root, or wherever HGetVol says */
-	if (HGetVol(NULL, &vRef, &dID) == noErr)
+	/* start in ~ (Documents on the startup disk), like a Unix shell */
+	s->shell_at_root = 0;
+	if (home_folder(&vRef, &dID))
+	{
+		s->shell_vRefNum = vRef;
+		s->shell_dirID = dID;
+	}
+	else if (HGetVol(NULL, &vRef, &dID) == noErr)
 	{
 		s->shell_vRefNum = vRef;
 		s->shell_dirID = dID;
