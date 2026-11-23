@@ -30,7 +30,6 @@
 #include <Windows.h>
 #include <ToolUtils.h>
 
-#include <math.h>
 #include <string.h>
 
 #include "mbedtls/sha256.h"
@@ -57,12 +56,51 @@ static mbedtls_sha256_context g_ctx;     /* gathering context, finished into g_p
 /* Estimation and health tests                                        */
 /* ------------------------------------------------------------------ */
 
+/* Integer square root of a 64-bit value. */
+static unsigned long isqrt64(unsigned long long v)
+{
+    unsigned long long r = 0, bit = 1ULL << 62;
+    while (bit > v)
+        bit >>= 2;
+    while (bit) {
+        if (v >= r + bit) {
+            v -= r + bit;
+            r = (r >> 1) + bit;
+        } else {
+            r >>= 1;
+        }
+        bit >>= 2;
+    }
+    return (unsigned long)r;
+}
+
+/* -log2(x) for 0 < x < 1, with x and the result in 16.16 fixed point.
+   No floating point: many 68k Macs (and Mac OS 9's 68k emulator) have no FPU. */
+static unsigned long neglog2_q16(unsigned long x)
+{
+    unsigned long k = 0, frac = 0, i;
+    unsigned long long z = x;
+    while (z < 65536UL) {               /* normalise z into [1, 2) */
+        z <<= 1;
+        k++;
+    }
+    for (i = 0; i < 16; i++) {          /* fractional bits of log2(z) by squaring */
+        z = (z * z) >> 16;
+        frac <<= 1;
+        if (z >= 131072UL) {
+            z >>= 1;
+            frac |= 1;
+        }
+    }
+    return (k << 16) - frac;            /* -log2(x) = k - log2(z) */
+}
+
 /* Returns credited bits for n byte samples, or 0 if a health test fails. */
 static long assess(const unsigned char *s, long n)
 {
     long counts[256];
     long i, run = 1, maxcount = 0;
-    double p, pu, h;
+    unsigned long p, pu, h, margin;
 
     if (n < APT_WINDOW)
         return 0;
@@ -92,7 +130,7 @@ static long assess(const unsigned char *s, long n)
     for (i = 0; i < 256; i++)
         if (counts[i] > maxcount)
             maxcount = counts[i];
-    p = (double)maxcount / (double)n;
+    p = (unsigned long)(((unsigned long long)maxcount * 65536UL + (unsigned long)n - 1) / (unsigned long)n);
 
     /* prediction estimate: how often the next sample can be predicted from
        earlier ones. Catches patterns the frequency count can't see:
@@ -114,15 +152,21 @@ static long assess(const unsigned char *s, long n)
                 correct++;
         if (correct > best)
             best = correct;
-        if ((double)best / (double)trials > p)
-            p = (double)best / (double)trials;
+        {
+            unsigned long pp = (unsigned long)(((unsigned long long)best * 65536UL + (unsigned long)trials - 1) / (unsigned long)trials);
+            if (pp > p)
+                p = pp;
+        }
     }
 
-    pu = p + 2.576 * sqrt(p * (1.0 - p) / (double)(n - 1));
-    if (pu >= 1.0)
+    /* 99% upper bound: pu = p + 2.576 * sqrt(p(1-p)/(n-1)), all in 16.16, rounded up */
+    margin = isqrt64(((unsigned long long)p * (65536UL - (p > 65536UL ? 65536UL : p))) / (unsigned long)(n - 1));
+    margin = (unsigned long)(((unsigned long long)margin * 168821UL + 65535UL) >> 16) + 1;   /* 2.576 = 168821/65536 */
+    pu = p + margin;
+    if (pu >= 65536UL)
         return 0;
-    h = -log(pu) / log(2.0);                    /* bits per sample */
-    return (long)(h * (double)n / CREDIT_DIVISOR);
+    h = neglog2_q16(pu);                                    /* bits per sample, 16.16 */
+    return (long)(((unsigned long long)h * (unsigned long)n) / (65536UL * CREDIT_DIVISOR));
 }
 
 /* ------------------------------------------------------------------ */
