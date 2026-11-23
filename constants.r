@@ -16,7 +16,7 @@
 #define APP_RELEASE_REGION      verUS
 
 /* requested number of bytes for RAM, used in SIZE resource */
-#define APP_MINIMUM_PARTITION   2*1024*1024
+#define APP_MINIMUM_PARTITION   3*1024*1024
 #define APP_REQUIRED_PARTITION  APP_MINIMUM_PARTITION
 
 /* size in bytes for recv and send thread buffers */

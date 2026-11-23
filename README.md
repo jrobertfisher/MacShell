@@ -41,7 +41,7 @@ Features
 Requirements
 ------------
 * **CPU**: 68020 or later (a 68030 or faster is recommended for SSH)
-* **RAM**: 2 MB for MacShell
+* **RAM**: 3 MB for MacShell
 * **System**: 7.1 or later (before 7.5, the Thread Manager extension is needed)
 * **Network**: Open Transport for SSH, FTP, wget and curl. The local shell works without it.
 
