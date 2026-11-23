@@ -1,73 +1,140 @@
-SevenTTY
+MacShell
 ========
-SSH client, local shell, and terminal emulator for classic Mac OS 7/8/9.
+An SSH client and Unix-style shell for classic Mac OS 7, 8 and 9 on 68k Macs.
 
-A fork of [ssheven](https://github.com/cy384/ssheven) by cy384, expanded into a full-featured terminal environment.
+MacShell is a fork of [SevenTTY](https://github.com/LXXero/SevenTTY) by LXXero, which is itself a
+fork of [ssheven](https://github.com/cy384/ssheven) by cy384. It aims to be a clean, plain terminal
+with current security libraries and the everyday command-line tools you know from Linux and macOS.
 
-![SevenTTY screenshot](screenshot.png)
+![MacShell icons](docs/icon-preview.png)
 
-features
+What's different from SevenTTY
+------------------------------
+* **Current security libraries**: libssh2 from upstream (November 2026, includes the
+  Terrapin "strict key exchange" fix) and mbedTLS 3.6.7 LTS, built with unused features removed.
+* **Real randomness for SSH and TLS**: classic Mac OS has no random number source, so MacShell
+  gathers its own (see [Randomness](#randomness)) and refuses to make a secure connection until it
+  has at least 256 bits.
+* **A clean look**: white text on black by default, a plain prompt, plain `ls`. Colour text from
+  programs (for example `ls --color` on a server) still works.
+* **An interactive FTP client** with active and passive modes.
+* **`curl`** alongside `wget`.
+* **A new icon**, an original design.
+
+Features
 --------
-* **Multi-window**: Cmd+N opens independent windows, each with their own tabs
-* **Tabbed sessions**: Cmd+T for local shell tabs, Cmd+S for SSH tabs, Cmd+1-8 to switch
-* **Local shell**: built-in command interpreter with 30+ commands
-  * File operations: `ls`, `cd`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `touch`, and more
-  * System info: `ps`, `free [-h]`, `df [-m|-h]`, `uname`, `date`
-  * Mac-specific: `getinfo`, `chown`, `settype`, `setcreator`, `chmod`, `label`
-  * Tab completion, command history (up/down arrows), colorized `ls` output
-* **SSH client**: password and public key authentication, known hosts verification
-* **Scrollback**: Shift+Page Up/Down to scroll through history (100 lines per session)
-* **Copy/paste**: mouse text selection with Cmd+C/V
-* **Telnet & raw TCP**: `telnet host [port]` opens in a new tab; `nc host port` for raw TCP inline
-* **FTP client**: `ftp get user@host:/path`, `ftp put user@host:/path file`, `ftp ls user@host:/path` — PASV mode, progress bar, glob uploads
-* **SCP file transfer**: `scp get host:/path`, `scp put host:/path file` — password and key auth
-* **wget**: `wget http://...` and `wget ftp://...` — one-shot file downloads with progress
-* **256-color & true-color**: xterm-256color with RGB support via Color QuickDraw, bold, italic, underline, reverse video
-* **Symbol font**: custom bitmap font for box drawing, block elements, shading, and geometric shapes — seamless rendering at all font sizes
-* **Color themes**: load iTerm2-compatible `.sttheme` files, or use built-in Dark (Tango) and Light palettes
-* **Configurable**: font size, display mode (color/monochrome), foreground/background colors, prompt color, terminal type string
+* **SSH client**: password and public key login, known hosts checking.
+* **Local shell** with almost 90 commands, tab completion and history (up/down arrows):
+  * Files: `ls`, `cd`, `pwd`, `cat`, `less`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `touch`, `ln`, `head`, `tail`, `grep`, `wc`, `cut`, `file`, `strings`, `hexdump`, `xxd`
+  * Text: `dos2unix`, `unix2mac`, `mac2unix`, `fold`, `nl`, `rev`, `rot13`, `seq`, `echo`
+  * Checksums: `md5sum`, `sha1sum`, `sha256sum`, `sha512sum`, `crc32`, `cmp`
+  * System: `ps`, `free`, `df`, `uname`, `uptime`, `date`, `cal`, `hostname`, `ifconfig`, `entropy`
+  * Mac-specific: `getinfo`, `settype`, `setcreator`, `fixtype`, `chattr`, `chmod`, `chown`, `label`, `open`
+  * Network: `ssh`, `telnet`, `nc`, `ping`, `host`, `ftp`, `scp`, `wget`, `curl`
+* **Windows and tabs**: Cmd+N opens a window; Cmd+T opens a shell tab, Cmd+S an SSH tab.
+* **Terminal**: xterm-256color with 256 colours and true colour, bold, italic, underline, reverse
+  video, a symbol font for box drawing, 100 lines of scrollback per tab, copy and paste.
 
-system requirements
--------------------
-* **CPU**: any PPC processor, or at least a 68030 (68040 strongly recommended)
-* **RAM**: 2 MB
-* **Disk**: fits on a floppy
-* **System**: 7.1 or later (versions below 7.5 require the Thread Manager extension)
-* **Network**: Open Transport required for SSH (local shell works without it)
-
-keyboard shortcuts
-------------------
-| Shortcut | Action |
-|----------|--------|
-| Cmd+N | New window |
-| Cmd+T | New local shell tab |
-| Cmd+S | New SSH tab |
-| Cmd+W | Close tab/window |
-| Cmd+D | Disconnect SSH / close tab / quit |
-| Cmd+K | Connect (SSH) |
-| Cmd+1-8 | Switch tabs |
-| Cmd+C/V | Copy/paste |
-| Shift+PgUp/PgDn | Scroll through history |
-
-color themes
+Requirements
 ------------
-SevenTTY supports custom color palettes via `.sttheme` files (16 ANSI colors plus background, foreground, and cursor). Use the **Preferences → Theme...** button to load a theme, or select the built-in **Dark** (Tango palette) or **Light** modes.
+* **CPU**: 68020 or later (a 68030 or faster is recommended for SSH)
+* **RAM**: 2 MB for MacShell
+* **System**: 7.1 or later (before 7.5, the Thread Manager extension is needed)
+* **Network**: Open Transport for SSH, FTP, wget and curl. The local shell works without it.
 
-To convert an iTerm2 color scheme:
+MacShell has been tested on a Macintosh LC with a 68030 accelerator running System 7.5.3, and in
+emulated Mac OS 9. The source still has SevenTTY's PowerPC build, but it hasn't been built or
+tested since the changes above.
+
+Randomness
+----------
+SSH and HTTPS keys are only as strong as the random numbers behind them, and classic Mac OS has
+no random number source. MacShell gathers randomness from:
+
+1. **Sound input noise**: the lowest bits of the microphone or line input, which carry analogue
+   noise even with nothing plugged in.
+2. **Clock jitter**: tiny timing variations between the processor and the Mac's VIA timer.
+
+Each source must pass health tests based on NIST SP 800-90B (repetition, proportion and prediction
+tests) and is credited conservatively; silence, hum and repeating patterns count for nothing. The
+results are mixed with SHA-256 and saved to a seed file ("MacShell Random Seed" in the Preferences
+folder), which is renewed on each launch.
+
+If the sources and seed together give less than 256 bits, MacShell asks you to move the mouse and
+type a few keys. Type `entropy` to see where the randomness came from.
+
+Interactive FTP
+---------------
+```
+$ ftp 192.168.0.10
+Username: (enter for anonymous)
+ftp> ls
+ftp> cd "To Mac"
+ftp> get file.sit
+ftp> put notes.txt
+ftp> bye
+```
+* Press Return at the Username prompt to log in anonymously; you won't be asked for a password.
+  Passwords for other accounts aren't shown as you type.
+* Remote commands: `ls`/`dir`, `cd`, `cdup`, `pwd`, `get`, `put`, `mkdir`, `rmdir`, `delete`,
+  `rename`, `size`. Local: `lcd`, `lpwd`, `lls`. Session: `passive`, `active`, `status`, `help`, `bye`.
+* Passive mode is the default. `ftp -A host` (or `active` in a session) uses active mode, where the
+  server connects back to the Mac; this needs the Mac to be reachable from the server.
+* One-shot transfers also work: `ftp get user@host:/path/file`, `ftp put file user@host:/dir/`,
+  `ftp ls user@host:/dir/`.
+* Transfers are binary and copy the data fork only.
+
+wget and curl
+-------------
+* `wget <url>` saves to a file named from the URL (`index.html` for a site address) and never
+  overwrites a file: it saves as `name.1`, `name.2` and so on instead. `-O file` chooses the name;
+  `-O -` shows the download on screen. wget follows redirects.
+* `curl <url>` shows the page on screen. `-o file` saves to a file, `-O` saves with the name from
+  the URL, `-I` shows only the headers and `-L` follows redirects. curl stops if the data is binary
+  and suggests `-o` instead.
+* Downloads with a MacBinary header, or a known file extension, get the right Mac type and creator.
+
+Security notes
+--------------
+* **HTTPS certificates are not checked.** Classic Mac OS has no certificate store, so `wget` and
+  `curl` encrypt the connection but can't confirm who is on the other end. They print a warning
+  each time. Don't rely on them for anything sensitive.
+* **FTP and Telnet are not encrypted.** Passwords and files cross the network as plain text. Use
+  them only on a network you trust; use SSH or `scp` otherwise.
+* SSH checks the server's host key against MacShell's known hosts file.
+
+Colour schemes
+--------------
+**File → Preferences** has a **Color scheme** menu: White on Black (the default), Black on White,
+Green on Black, Amber on Black, Solarized Dark and Solarized Light. **Theme File...** loads a
+`.sttheme` file, and the Background and Text colour menus override a scheme's colours.
+
+To convert an iTerm2 colour scheme to a `.sttheme` file:
 
 ```bash
 python3 tools/itermcolors2sttheme.py MyTheme.itermcolors > MyTheme.sttheme
 ```
 
-Copy the `.sttheme` file to your Mac and load it from the preferences dialog. The theme persists across launches.
+Keyboard shortcuts
+------------------
+| Shortcut | Action |
+|----------|--------|
+| Cmd+N | New window |
+| Cmd+T | New shell tab |
+| Cmd+S | New SSH tab |
+| Cmd+W | Close tab or window |
+| Cmd+D | Disconnect SSH, close tab or quit |
+| Cmd+Q | Quit |
+| Cmd+K | Connect (SSH) |
+| Cmd+1 to Cmd+8 | Switch tabs |
+| Cmd+C, Cmd+V | Copy, paste |
+| Shift+Page Up/Down | Scroll back |
+| Ctrl+C | Cancel the current command or transfer |
 
-Hundreds of iTerm2 themes are available at [iterm2colorschemes.com](https://iterm2colorschemes.com/).
-
-build
------
-Requires [Retro68](https://github.com/autc04/Retro68/) with Universal Headers and cmake.
-
-Dependencies (mbedtls, libssh2, libvterm) are pulled in as submodules and built automatically.
+Building
+--------
+Requires [Retro68](https://github.com/autc04/Retro68/) and cmake. MacShell's patched libssh2,
+mbedTLS and libvterm are git submodules and are built automatically.
 
 ```bash
 mkdir build-m68k && cd build-m68k
@@ -75,10 +142,15 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE=/path/to/Retro68-build/toolchain/m68k-apple-maco
 cmake --build . --parallel $(nproc)
 ```
 
-The script `build-fat.bash` can also be used to build a fat binary.
+The result is `MacShell.bin` (MacBinary). The build sets the Finder's "has bundle" flag so the
+icon appears. The 68k code uses no floating-point instructions, so MacShell runs on Macs without
+an FPU.
 
-license
+To change the icon, edit and run `tools/make_icons.py icons.r docs/icon-preview.png`.
+
+License
 -------
-Licensed under the BSD 2 clause license, see `LICENSE` file.
+BSD 2-Clause; see `LICENSE`.
 
-Based on ssheven by [cy384](https://github.com/cy384/ssheven).
+Based on [SevenTTY](https://github.com/LXXero/SevenTTY) by LXXero and
+[ssheven](https://github.com/cy384/ssheven) by cy384.
