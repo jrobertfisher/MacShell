@@ -8301,7 +8301,7 @@ static void ftp_interactive_open(int idx, const char* spec, int active)
 	memset(buf, 0, sizeof buf);
 
 	if (s->ftp_user[0] == '\0')
-		s->ftp_mode = FTP_MODE_ASK_USER;                /* "Name (host:anonymous):" */
+		s->ftp_mode = FTP_MODE_ASK_USER;                /* "Username [anonymous]:" */
 	else if (ftp_is_anonymous(s->ftp_user) || s->ftp_password[0])
 		ftp_session_start(idx, NULL);
 	else
@@ -10958,7 +10958,7 @@ void shell_prompt(int idx)
 
 	switch (s->ftp_mode)
 	{
-		case FTP_MODE_ASK_USER: printf_s(idx, "Name (%s:anonymous): ", s->ftp_host); return;
+		case FTP_MODE_ASK_USER: vt_write(idx, "Username [anonymous]: "); return;
 		case FTP_MODE_ASK_PASS: vt_write(idx, "Password: "); return;
 		case FTP_MODE_CONNECTING: return;
 		case FTP_MODE_READY: vt_write(idx, "\033[1mftp>\033[0m "); return;
