@@ -2615,6 +2615,27 @@ int key_dialog(void)
 	Handle full_path = NULL;
 	int path_length = 0;
 
+	/* forget saved key files that have been moved or deleted */
+	{
+		int gone = 0;
+		FILE* f;
+		if (prefs.pubkey_path && prefs.pubkey_path[0])
+		{
+			f = fopen(prefs.pubkey_path, "rb");
+			if (f) fclose(f); else gone = 1;
+		}
+		if (prefs.privkey_path && prefs.privkey_path[0])
+		{
+			f = fopen(prefs.privkey_path, "rb");
+			if (f) fclose(f); else gone = 1;
+		}
+		if (gone)
+		{
+			if (prefs.pubkey_path && prefs.pubkey_path[0]) prefs.pubkey_path[0] = '\0';
+			if (prefs.privkey_path && prefs.privkey_path[0]) prefs.privkey_path[0] = '\0';
+		}
+	}
+
 	/* like OpenSSH's ~/.ssh/id_ecdsa: use Documents:.ssh:id_ecdsa if no key is chosen yet */
 	if ((prefs.pubkey_path == NULL || prefs.pubkey_path[0] == '\0') &&
 	    (prefs.privkey_path == NULL || prefs.privkey_path[0] == '\0'))
