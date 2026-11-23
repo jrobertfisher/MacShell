@@ -26,13 +26,13 @@ resource 'DITL' (DITL_ABOUT, purgeable) {
 		Picture { enabled, PICT_ABOUT };
 
 		{ 34, 160, 54, 410},
-		StaticText { disabled, "SevenTTY" };
+		StaticText { disabled, "MacShell" };
 
 		{ 64, 160, 84, 410},
 		StaticText { disabled, APP_LONG_VERSION };
 
 		{ 94, 160, 114, 410},
-		StaticText { disabled, "https://github.com/LXXero/SevenTTY" };
+		StaticText { disabled, "SevenTTY by LXXero, ssheven by cy384" };
 	}
 };
 
@@ -159,7 +159,7 @@ resource 'DITL' (DITL_CPU_BAD) {
 		Button { enabled, "OK" };
 
 		{ 10, 70, 30, 340 },
-		StaticText { enabled, "SevenTTY requires a 68020 or later!" };
+		StaticText { enabled, "MacShell requires a 68020 or later!" };
 	}
 };
 
@@ -444,8 +444,8 @@ resource 'vers' (2, purgeable) {
 };
 
 /* signature resource */
-type 'SSH7' as 'STR ';
-resource 'SSH7' (0, purgeable) {
+type 'MShl' as 'STR ';
+resource 'MShl' (0, purgeable) {
 	APP_DESCRIPTION
 };
 
@@ -456,11 +456,11 @@ resource 'FREF' (APP_ICON, purgeable) {
 
 /* preferences file -> icon relation */
 resource 'FREF' (FILE_ICON, purgeable) {
-	'SH7p', 1, ""
+	'MShp', 1, ""
 };
 
 resource 'BNDL' (128, purgeable) {
-	'SSH7', 0,
+	'MShl', 0,
 	{
 		'ICN#', {0, APP_ICON, 1, FILE_ICON},
 		'FREF', {0, APP_ICON, 1, FILE_ICON}
@@ -477,7 +477,7 @@ resource 'MENU' (MENU_APPLE) {
 	allEnabled, enabled;
 	apple;
 	{
-		"About SevenTTY...", noIcon, noKey, noMark, plain;
+		"About MacShell...", noIcon, noKey, noMark, plain;
 		"-", noIcon, noKey, noMark, plain;
 	}
 };

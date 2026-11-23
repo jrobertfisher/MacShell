@@ -1,5 +1,5 @@
 /*
- * SevenTTY (based on ssheven by cy384)
+ * MacShell (based on SevenTTY by LXXero and ssheven by cy384)
  *
  * Copyright (c) 2021 by cy384 <cy384@cy384.com>
  * See LICENSE file for details
@@ -327,8 +327,8 @@ char* known_hosts_full_path(int* found)
 	FSSpec known_hosts_file;
 	*found = 0;
 
-	OSType pref_type = 'SH7p';
-	OSType creator_type = 'SSH7';
+	OSType pref_type = 'MShp';
+	OSType creator_type = 'MShl';
 
 	// find the preferences folder on the system disk, create folder if needed
 	OSErr e = FindFolder(kOnSystemDisk, kPreferencesFolderType, kCreateFolder, &foundVRefNum, &foundDirID);

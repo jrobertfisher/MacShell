@@ -1,5 +1,6 @@
 /*
- * SevenTTY - local shell command interpreter
+ * MacShell - local shell command interpreter
+ * (based on SevenTTY by LXXero and ssheven by cy384)
  *
  * Maps Unix-like commands to classic Mac OS Toolbox equivalents.
  * Runs inside a vterm session tab with no network connection.
@@ -10091,7 +10092,7 @@ static void cmd_readlink(int idx, int argc, char** argv)
 static void cmd_help(int idx, int argc, char* argv[])
 {
 	static const char* help_lines[] = {
-		"SevenTTY local shell - commands:",
+		"MacShell - commands:",
 		"",
 		"  \033[1mFile operations:\033[0m",
 		"    ls [-la] [path]    list directory",

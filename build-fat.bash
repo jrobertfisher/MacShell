@@ -38,11 +38,11 @@ mkdir build-fat
 $RETRO68_PATH/toolchain/bin/Rez \
 $RETRO68_PATH/toolchain/m68k-apple-macos/RIncludes/RetroPPCAPPL.r \
 -I$RETRO68_PATH/toolchain/m68k-apple-macos/RIncludes \
--DCFRAG_NAME="\"SevenTTY\"" \
---copy build-m68k/SevenTTY.code.bin \
--o build-fat/SevenTTY-fat.bin \
---cc build-fat/SevenTTY-fat.dsk --cc build-fat/SevenTTY-fat.APPL --cc build-fat/%SevenTTY-fat.ad \
--t APPL -c SSH7 \
---data build-ppc/SevenTTY.pef build-ppc/SevenTTY.r.rsrc.bin
+-DCFRAG_NAME="\"MacShell\"" \
+--copy build-m68k/MacShell.code.bin \
+-o build-fat/MacShell-fat.bin \
+--cc build-fat/MacShell-fat.dsk --cc build-fat/MacShell-fat.APPL --cc build-fat/%MacShell-fat.ad \
+-t APPL -c MShl \
+--data build-ppc/MacShell.pef build-ppc/MacShell.r.rsrc.bin
 
 echo "done."

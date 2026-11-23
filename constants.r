@@ -4,11 +4,11 @@
 #define __CONSTANTS_R__
 
 /* so many versions */
-#define APP_VERSION             "1.2.0"
-#define APP_LONG_VERSION        "1.2.0, ssheven fork by LXXero"
-#define APP_DESCRIPTION         "SevenTTY 1.2.0 - SSH & shell for classic Mac OS"
+#define APP_VERSION             "1.0"
+#define APP_LONG_VERSION        "1.0, based on SevenTTY and ssheven"
+#define APP_DESCRIPTION         "MacShell 1.0 - SSH client and shell for classic Mac OS"
 #define APP_VERSION_MAJOR       0x01
-#define APP_VERSION_MINOR       0x02
+#define APP_VERSION_MINOR       0x00
 #define APP_VERSION_PRERELEASE  0x00
 
 /* options: development, alpha, beta, release */
@@ -31,7 +31,7 @@
 #define DEFAULT_TERM_STRING "xterm-256color"
 
 /* name for the preferences file (pascal string) */
-#define PREFERENCES_FILENAME "\pSevenTTY Preferences"
+#define PREFERENCES_FILENAME "\pMacShell Preferences"
 
 /* application icon set */
 #define APP_ICON 128

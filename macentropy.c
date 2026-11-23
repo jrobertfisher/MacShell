@@ -312,7 +312,7 @@ int macentropy_save_seed(void)
 
     err = seed_spec(&spec, true);
     if (err == fnfErr) {
-        err = FSpCreate(&spec, 'SSH7', 'MSrs', smSystemScript);
+        err = FSpCreate(&spec, 'MShl', 'MSrs', smSystemScript);
     }
     if (err == noErr)
         err = FSpOpenDF(&spec, fsWrPerm, &ref);

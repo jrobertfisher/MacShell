@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate unicode.h for SevenTTY.
+Generate unicode.h for MacShell.
 
 Builds UNICODE_BMP_NORMALIZER table: maps Unicode codepoints 0-65535 to
 Mac Roman byte values. Characters with exact Mac Roman equivalents get their

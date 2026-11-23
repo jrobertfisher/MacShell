@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert an iTerm2 .itermcolors theme to SevenTTY .sttheme format.
+"""Convert an iTerm2 .itermcolors theme to MacShell .sttheme format.
 
 Usage: python3 itermcolors2sttheme.py Theme.itermcolors > Theme.sttheme
 """

@@ -1,5 +1,6 @@
 /*
- * SevenTTY - Telnet and raw TCP (nc) support
+ * MacShell - Telnet and raw TCP (nc) support
+ * (based on SevenTTY by LXXero and ssheven by cy384)
  */
 
 #pragma once

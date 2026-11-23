@@ -1,5 +1,5 @@
 /*
- * SevenTTY (based on ssheven by cy384)
+ * MacShell (based on SevenTTY by LXXero and ssheven by cy384)
  *
  * Copyright (c) 2020 by cy384 <cy384@cy384.com>
  * See LICENSE file for details

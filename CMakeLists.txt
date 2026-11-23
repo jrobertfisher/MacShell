@@ -1,12 +1,12 @@
-# SevenTTY
+# MacShell
 #
-# Based on ssheven by cy384 <cy384@cy384.com>
+# Based on MacShell by LXXero and ssheven by cy384 <cy384@cy384.com>
 # See LICENSE file for details
 
 cmake_minimum_required(VERSION 3.9)
 
-project(SevenTTY)
-add_application(SevenTTY CREATOR "SSH7" app.c console.c resources.r symbolfont.r net.c telnet.c debug.c shell.c macentropy.c)
+project(MacShell)
+add_application(MacShell CREATOR "MShl" app.c console.c resources.r symbolfont.r net.c telnet.c debug.c shell.c macentropy.c)
 
 # MacShell's mbedTLS settings (applied on top of mbedTLS's defaults) and the
 # Open Transport switch for libssh2. Both libraries are built with 68020 code.
@@ -44,12 +44,19 @@ add_subdirectory(libvterm)
 
 IF(CMAKE_SYSTEM_NAME MATCHES Retro68)
 # for 68k
-  set_target_properties(SevenTTY PROPERTIES COMPILE_FLAGS "-ffunction-sections -mcpu=68020 -O3 -Wall -Wextra -Wno-unused-parameter")
-  set_target_properties(SevenTTY PROPERTIES LINK_FLAGS "-Wl,-gc-sections")
-  target_link_libraries(SevenTTY libssh2 mbedtls mbedx509 mbedcrypto OpenTransportApp OpenTransport OpenTptInet vterm retrocrt)
+  set_target_properties(MacShell PROPERTIES COMPILE_FLAGS "-ffunction-sections -mcpu=68020 -O3 -Wall -Wextra -Wno-unused-parameter")
+  set_target_properties(MacShell PROPERTIES LINK_FLAGS "-Wl,-gc-sections")
+  target_link_libraries(MacShell libssh2 mbedtls mbedx509 mbedcrypto OpenTransportApp OpenTransport OpenTptInet vterm retrocrt)
 ELSE()
 # for PPC
-  set_target_properties(SevenTTY PROPERTIES COMPILE_FLAGS "-ffunction-sections -mcpu=601 -O3 -Wall -Wextra -Wno-unused-parameter")
-  set_target_properties(SevenTTY PROPERTIES LINK_FLAGS "-Wl,-gc-sections")
-  target_link_libraries(SevenTTY ThreadsLib libssh2 mbedtls mbedx509 mbedcrypto OpenTransportAppPPC OpenTransportLib OpenTptInternetLib OpenTptInetPPC vterm retrocrt)
+  set_target_properties(MacShell PROPERTIES COMPILE_FLAGS "-ffunction-sections -mcpu=601 -O3 -Wall -Wextra -Wno-unused-parameter")
+  set_target_properties(MacShell PROPERTIES LINK_FLAGS "-Wl,-gc-sections")
+  target_link_libraries(MacShell ThreadsLib libssh2 mbedtls mbedx509 mbedcrypto OpenTransportAppPPC OpenTransportLib OpenTptInternetLib OpenTptInetPPC vterm retrocrt)
 ENDIF()
+
+# Set the Finder's hasBundle flag so MacShell shows its own icon
+# (Retro68's Rez doesn't set it).
+add_custom_target(MacShell_bundle_flag ALL
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/set_bundle_bit.py MacShell.bin
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+add_dependencies(MacShell_bundle_flag MacShell_APPL)

@@ -1,5 +1,5 @@
 /*
- * SevenTTY (based on ssheven by cy384)
+ * MacShell (based on SevenTTY by LXXero and ssheven by cy384)
  *
  * Copyright (c) 2020 by cy384 <cy384@cy384.com>
  * See LICENSE file for details
@@ -217,7 +217,7 @@ int save_prefs(void)
 	if (e == fnfErr)
 	{
 		/* no file yet — create new resource file */
-		FSpCreateResFile(&spec, 'SSH7', 'SH7p', smSystemScript);
+		FSpCreateResFile(&spec, 'MShl', 'MShp', smSystemScript);
 		if (ResError() != noErr) return 0;
 	}
 	else
@@ -228,7 +228,7 @@ int save_prefs(void)
 		{
 			/* old text-based prefs file, replace with resource file */
 			FSpDelete(&spec);
-			FSpCreateResFile(&spec, 'SSH7', 'SH7p', smSystemScript);
+			FSpCreateResFile(&spec, 'MShl', 'MShp', smSystemScript);
 			if (ResError() != noErr) return 0;
 		}
 		else
@@ -1471,7 +1471,7 @@ int new_window(void)
 	initial_window_bounds.right = initial_window_bounds.left + con.cell_width * wc->size_x + 4 + 16;
 
 	{
-		ConstStr255Param title = "\pSevenTTY " APP_VERSION;
+		ConstStr255Param title = "\pMacShell";
 		WindowPtr win = NewCWindow(NULL, &initial_window_bounds, title, true, documentProc, (WindowPtr)-1, true, 0);
 		Rect sb_rect;
 
@@ -3060,18 +3060,8 @@ int main(int argc, char** argv)
 		int sid = active_session_global();
 		char* logo =
 			"\033[2J\033[H"
-			"\033[32m  ____                      _____ _______   __\r\n"
-			"\033[33m / ___|  _____   _____ _ __|_   _|_   _\\ \\ / /\r\n"
-			"\033[31m \\___ \\ / _ \\ \\ / / _ \\ '_ \\ | |   | |  \\ V /\r\n"
-			"\033[35m  ___) |  __/\\ V /  __/ | | || |   | |   | |\r\n"
-			"\033[34m |____/ \\___| \\_/ \\___|_| |_||_|   |_|   |_|\r\n"
-			"\033[36mversion " APP_VERSION ", based on ssheven by cy384\r\n"
-#if defined(__ppc__)
-			"running in PPC mode.\r\n"
-#else
-			"running in 68k mode.\r\n"
-#endif
-			"\033[0mtype 'help' for commands\r\n\r\n";
+			"MacShell " APP_VERSION "\r\n"
+			"Type 'help' for commands.\r\n\r\n";
 		vterm_input_write(sessions[sid].vterm, logo, strlen(logo));
 		shell_prompt(sid);
 	}
