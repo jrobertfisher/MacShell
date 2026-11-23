@@ -523,7 +523,7 @@ resource 'MENU' (MENU_COLOR) {
 	allEnabled, enabled;
 	"Color";
 	{
-		"(Theme)", noIcon, noKey, noMark, plain;
+		"(Scheme)", noIcon, noKey, noMark, plain;
 		"Black", noIcon, noKey, noMark, plain;
 		"Red", noIcon, noKey, noMark, plain;
 		"Green", noIcon, noKey, noMark, plain;
@@ -560,8 +560,23 @@ resource 'MENU' (MENU_FONT_SIZE) {
 	}
 };
 
+resource 'MENU' (MENU_SCHEME) {
+	MENU_SCHEME, textMenuProc;
+	allEnabled, enabled;
+	"Scheme";
+	{
+		"White on Black", noIcon, noKey, noMark, plain;
+		"Black on White", noIcon, noKey, noMark, plain;
+		"Green on Black", noIcon, noKey, noMark, plain;
+		"Amber on Black", noIcon, noKey, noMark, plain;
+		"Solarized Dark", noIcon, noKey, noMark, plain;
+		"Solarized Light", noIcon, noKey, noMark, plain;
+		"Theme File...", noIcon, noKey, noMark, plain;
+	}
+};
+
 resource 'DLOG' (DLOG_PREFERENCES) {
-	{ 50, 100, 255, 420 },
+	{ 50, 100, 290, 420 },
 	dBoxProc,
 	visible,
 	noGoAway,
@@ -573,53 +588,50 @@ resource 'DLOG' (DLOG_PREFERENCES) {
 
 resource 'DITL' (DITL_PREFERENCES) {
 	{
-		{ 175, 230, 195, 310 },
+		/* 1 */ { 210, 230, 230, 310 },
 		Button { enabled, "OK" };
 
-		{ 240-10-20-5, 320-10-80-5, 240-10+5, 320-10+5 }, /* box for border */
+		/* 2 */ { 205, 225, 235, 315 }, /* box for border */
 		UserItem { enabled };
 
-		{ 10, 35, 28, 130 },
-		StaticText { enabled, "Terminal type: " };
+		/* 3 */ { 10, 35, 28, 140 },
+		StaticText { enabled, "Terminal type:" };
 
-		{ 40, 10, 58, 130 },
-		StaticText { enabled, "Background color: " };
+		/* 4 */ { 40, 38, 58, 140 },
+		StaticText { enabled, "Color scheme:" };
 
-		{ 70, 12, 88, 132 },
-		StaticText { enabled, "Foreground color: " };
+		/* 5 */ { 88, 10, 106, 140 },
+		StaticText { enabled, "Background color:" };
 
-		{ 10, 150, 29, 300 },
+		/* 6 */ { 10, 150, 29, 300 },
 		Control { disabled, CNTL_PREF_TERM_TYPE };
 
-		{ 40, 150, 59, 300 },
+		/* 7 */ { 40, 150, 59, 300 },
+		Control { enabled, CNTL_PREF_SCHEME };
+
+		/* 8 */ { 88, 150, 107, 300 },
 		Control { enabled, CNTL_PREF_BG_COLOR };
 
-		{ 70, 150, 89, 300 },
+		/* 9 */ { 118, 12, 136, 140 },
+		StaticText { enabled, "Text color:" };
+
+		/* 10 */ { 118, 150, 137, 300 },
 		Control { enabled, CNTL_PREF_FG_COLOR };
 
-		{ 100, 66, 118, 132 },
-		StaticText { enabled, "Font Size: " };
+		/* 11 */ { 148, 66, 166, 140 },
+		StaticText { enabled, "Font size:" };
 
-		{ 100, 150, 119, 300 },
+		/* 12 */ { 148, 150, 167, 300 },
 		Control { enabled, CNTL_PREF_FONT_SIZE };
 
-		{ 175, 10, 195, 90 },
+		/* 13 */ { 210, 10, 230, 90 },
 		Button { enabled, "Cancel" };
 
-		{ 148, 10, 168, 90 },
-		Button { enabled, "Theme..." };
+		/* 14 */ { 62, 155, 78, 310 },
+		StaticText { disabled, "" };
 
-		{ 148, 100, 168, 230 },
-		StaticText { enabled, "Default Dark" };
-
-		{ 175, 100, 195, 155 },
-		Button { enabled, "Dark" };
-
-		{ 175, 160, 195, 220 },
-		Button { enabled, "Light" };
-
-		{ 128, 10, 146, 220 },
-		CheckBox { enabled, "Bold is bright colors" };
+		/* 15 */ { 176, 150, 194, 310 },
+		CheckBox { enabled, "Bold is bright" };
 	}
 };
 
@@ -651,6 +663,17 @@ resource 'CNTL' (CNTL_PREF_TERM_TYPE) {
 	visible,
 	0,
 	MENU_TERM_TYPE,
+	popupMenuProc,
+	0,
+	""
+};
+
+resource 'CNTL' (CNTL_PREF_SCHEME) {
+	{ 0, 0, 19, 150 },
+	popupTitleLeftJust,
+	visible,
+	0,
+	MENU_SCHEME,
 	popupMenuProc,
 	0,
 	""

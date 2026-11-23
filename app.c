@@ -349,26 +349,55 @@ static void save_theme_originals(void)
 	prefs.orig_theme_fg = prefs.theme_fg;
 }
 
-static void init_dark_palette(void)
+static void init_solarized_palette(void)
 {
-	init_tango_palette();
-	make_rgb(&prefs.theme_bg, 0x00, 0x00, 0x00);
-	make_rgb(&prefs.theme_fg, 0xEE, 0xEE, 0xEC);
-	make_rgb(&prefs.theme_cursor, 0xEE, 0xEE, 0xEC);
-	save_theme_originals();
-	prefs.theme_loaded = 1;
-	strcpy(prefs.theme_name, "Default Dark");
+	static const unsigned char sol[16][3] = {
+		{0x07,0x36,0x42}, {0xDC,0x32,0x2F}, {0x85,0x99,0x00}, {0xB5,0x89,0x00},
+		{0x26,0x8B,0xD2}, {0xD3,0x36,0x82}, {0x2A,0xA1,0x98}, {0xEE,0xE8,0xD5},
+		{0x00,0x2B,0x36}, {0xCB,0x4B,0x16}, {0x58,0x6E,0x75}, {0x65,0x7B,0x83},
+		{0x83,0x94,0x96}, {0x6C,0x71,0xC4}, {0x93,0xA1,0xA1}, {0xFD,0xF6,0xE3}
+	};
+	int i;
+	for (i = 0; i < 16; i++)
+		make_rgb(&prefs.palette[i], sol[i][0], sol[i][1], sol[i][2]);
 }
 
-static void init_light_palette(void)
+/* Built-in colour schemes, in the order of the Color scheme popup.
+   ANSI colour text works in all of them. */
+static const char* const scheme_names[NUM_SCHEMES] = {
+	"White on Black", "Black on White", "Green on Black",
+	"Amber on Black", "Solarized Dark", "Solarized Light"
+};
+
+static void apply_scheme(int n)
 {
-	init_tango_palette();
-	make_rgb(&prefs.theme_bg, 0xFF, 0xFF, 0xFF);
-	make_rgb(&prefs.theme_fg, 0x00, 0x00, 0x00);
-	make_rgb(&prefs.theme_cursor, 0x00, 0x00, 0x00);
+	/* fg, bg, cursor */
+	static const unsigned char col[NUM_SCHEMES][3][3] = {
+		{ {0xFF,0xFF,0xFF}, {0x00,0x00,0x00}, {0xFF,0xFF,0xFF} },
+		{ {0x00,0x00,0x00}, {0xFF,0xFF,0xFF}, {0x00,0x00,0x00} },
+		{ {0x33,0xFF,0x33}, {0x00,0x00,0x00}, {0x33,0xFF,0x33} },
+		{ {0xFF,0xB0,0x00}, {0x00,0x00,0x00}, {0xFF,0xB0,0x00} },
+		{ {0x83,0x94,0x96}, {0x00,0x2B,0x36}, {0x93,0xA1,0xA1} },
+		{ {0x65,0x7B,0x83}, {0xFD,0xF6,0xE3}, {0x58,0x6E,0x75} }
+	};
+	if (n < 0 || n >= NUM_SCHEMES) n = 0;
+	if (n >= 4) init_solarized_palette(); else init_tango_palette();
+	make_rgb(&prefs.theme_fg, col[n][0][0], col[n][0][1], col[n][0][2]);
+	make_rgb(&prefs.theme_bg, col[n][1][0], col[n][1][1], col[n][1][2]);
+	make_rgb(&prefs.theme_cursor, col[n][2][0], col[n][2][1], col[n][2][2]);
 	save_theme_originals();
 	prefs.theme_loaded = 1;
-	strcpy(prefs.theme_name, "Default Light");
+	strcpy(prefs.theme_name, scheme_names[n]);
+}
+
+/* popup item for the current colours: 1..NUM_SCHEMES, or NUM_SCHEMES+1 for a theme file */
+static int current_scheme_item(void)
+{
+	int i;
+	for (i = 0; i < NUM_SCHEMES; i++)
+		if (strcmp(prefs.theme_name, scheme_names[i]) == 0)
+			return i + 1;
+	return NUM_SCHEMES + 1;
 }
 
 void init_prefs(void)
@@ -395,10 +424,10 @@ void init_prefs(void)
 	prefs.fg_color = COLOR_FROM_THEME;
 	prefs.bg_color = COLOR_FROM_THEME;
 	prefs.font_size = 9;
-	prefs.prompt_color = 4; /* blue */
+	prefs.prompt_color = 0; /* plain */
 	prefs.bold_is_bright = 1;
 
-	init_dark_palette();
+	apply_scheme(0);        /* white on black */
 
 	prefs.loaded_from_file = 0;
 }
@@ -566,8 +595,8 @@ void load_prefs(void)
 	prefs.font_size = dp->font_size;
 	prefs.theme_loaded = dp->theme_loaded;
 	prefs.prompt_color = dp->prompt_color;
-	if (prefs.prompt_color < 1 || prefs.prompt_color > 15)
-		prefs.prompt_color = 4; /* default blue; 0 = unset from old prefs */
+	if (prefs.prompt_color < 0 || prefs.prompt_color > 15)
+		prefs.prompt_color = 0; /* plain */
 
 	memcpy(prefs.palette, dp->palette, sizeof(prefs.palette));
 	prefs.theme_fg = dp->theme_fg;
@@ -808,6 +837,10 @@ void preferences_window(void)
 {
 	struct window_context* wc = &ACTIVE_WIN;
 
+	/* dialog items (see DITL_PREFERENCES in resources.r) */
+	enum { I_OK = 1, I_BORDER = 2, I_TERM = 6, I_SCHEME = 7, I_BG = 8, I_FG = 10,
+	       I_FONT = 12, I_CANCEL = 13, I_THEME_NAME = 14, I_BOLD = 15 };
+
 	// modal dialog setup
 	TEInit();
 	InitDialogs(NULL);
@@ -818,120 +851,117 @@ void preferences_window(void)
 	Handle itemH;
 	Rect box;
 
-	// draw default button indicator around the connect button
-	GetDialogItem(dlg, 2, &type, &itemH, &box);
-	SetDialogItem(dlg, 2, type, (Handle)NewUserItemUPP(&ButtonFrameProc), &box);
+	/* keep the current colours, to restore them on Cancel */
+	RGBColor saved_palette[16];
+	RGBColor saved_fg = prefs.theme_fg, saved_bg = prefs.theme_bg, saved_cursor = prefs.theme_cursor;
+	RGBColor saved_ofg = prefs.orig_theme_fg, saved_obg = prefs.orig_theme_bg;
+	char saved_name[64];
+	int saved_loaded = prefs.theme_loaded;
+	memcpy(saved_palette, prefs.palette, sizeof(saved_palette));
+	memcpy(saved_name, prefs.theme_name, sizeof(saved_name));
+
+	// draw default button indicator around the OK button
+	GetDialogItem(dlg, I_BORDER, &type, &itemH, &box);
+	SetDialogItem(dlg, I_BORDER, type, (Handle)NewUserItemUPP(&ButtonFrameProc), &box);
 
 	// get the handles for each menu, set to current prefs value
 	ControlHandle term_type_menu;
-	GetDialogItem(dlg, 6, &type, &itemH, &box);
+	GetDialogItem(dlg, I_TERM, &type, &itemH, &box);
 	term_type_menu = (ControlHandle)itemH;
 	SetControlValue(term_type_menu, prefs.display_mode + 1);
 
+	ControlHandle scheme_menu;
+	GetDialogItem(dlg, I_SCHEME, &type, &itemH, &box);
+	scheme_menu = (ControlHandle)itemH;
+	SetControlValue(scheme_menu, current_scheme_item());
+	int last_scheme = GetControlValue(scheme_menu);
+
 	ControlHandle bg_color_menu;
-	GetDialogItem(dlg, 7, &type, &itemH, &box);
+	GetDialogItem(dlg, I_BG, &type, &itemH, &box);
 	bg_color_menu = (ControlHandle)itemH;
 	SetControlValue(bg_color_menu, qd_color_to_menu_item(prefs.bg_color));
 
 	ControlHandle fg_color_menu;
-	GetDialogItem(dlg, 8, &type, &itemH, &box);
+	GetDialogItem(dlg, I_FG, &type, &itemH, &box);
 	fg_color_menu = (ControlHandle)itemH;
 	SetControlValue(fg_color_menu, qd_color_to_menu_item(prefs.fg_color));
 
 	ControlHandle font_size_menu;
-	GetDialogItem(dlg, 10, &type, &itemH, &box);
+	GetDialogItem(dlg, I_FONT, &type, &itemH, &box);
 	font_size_menu = (ControlHandle)itemH;
 	SetControlValue(font_size_menu, font_size_to_menu_item(prefs.font_size));
 
-	/* bold-is-bright checkbox (item 16) */
 	ControlHandle bold_bright_check;
-	GetDialogItem(dlg, 16, &type, &itemH, &box);
+	GetDialogItem(dlg, I_BOLD, &type, &itemH, &box);
 	bold_bright_check = (ControlHandle)itemH;
 	SetControlValue(bold_bright_check, prefs.bold_is_bright ? 1 : 0);
 
-	/* set up theme name display (item 13) */
+	/* name of a loaded theme file, shown under the popup */
+	Handle theme_name_h;
+	GetDialogItem(dlg, I_THEME_NAME, &type, &theme_name_h, &box);
 	{
-		Handle themeH;
-		Rect themeBox;
-		GetDialogItem(dlg, 13, &type, &themeH, &themeBox);
-		if (prefs.theme_loaded && prefs.theme_name[0] != '\0')
+		Str255 tname;
+		int tlen = 0;
+		if (last_scheme == NUM_SCHEMES + 1)
 		{
-			Str255 tname;
-			int tlen = strlen(prefs.theme_name);
-			if (tlen > 255) tlen = 255;
-			tname[0] = tlen;
+			tlen = strlen(prefs.theme_name);
+			if (tlen > 60) tlen = 60;
 			memcpy(tname + 1, prefs.theme_name, tlen);
-			SetDialogItemText(themeH, tname);
 		}
-		else
-		{
-			SetDialogItemText(themeH, "\pDefault Dark");
-		}
+		tname[0] = tlen;
+		SetDialogItemText(theme_name_h, tname);
 	}
 
-	/* let the modalmanager do everything */
-	/* stop on ok or cancel; handle Theme button (item 12) inline */
 	short item;
 	do {
 		ModalDialog(NULL, &item);
-		if (item == 12)
+		if (item == I_SCHEME)
 		{
-			/* Theme... button pressed */
-			StandardFileReply reply;
-			StandardGetFile(NULL, -1, NULL, &reply);
-			if (reply.sfGood)
+			int v = GetControlValue(scheme_menu);
+			Str255 tname;
+			tname[0] = 0;
+			if (v >= 1 && v <= NUM_SCHEMES)
 			{
-				if (load_theme_file(&reply.sfFile))
+				apply_scheme(v - 1);
+				last_scheme = v;
+			}
+			else
+			{
+				/* Theme File...: an .sttheme file */
+				StandardFileReply reply;
+				StandardGetFile(NULL, -1, NULL, &reply);
+				if (reply.sfGood && load_theme_file(&reply.sfFile))
 				{
-					/* update theme name display */
-					Handle themeH;
-					Rect themeBox;
-					GetDialogItem(dlg, 13, &type, &themeH, &themeBox);
+					int tlen = strlen(prefs.theme_name);
+					if (tlen > 60) tlen = 60;
+					memcpy(tname + 1, prefs.theme_name, tlen);
+					tname[0] = tlen;
+					last_scheme = v;
+				}
+				else
+				{
+					SetControlValue(scheme_menu, last_scheme);
+					if (last_scheme == NUM_SCHEMES + 1)
 					{
-						Str255 tname;
 						int tlen = strlen(prefs.theme_name);
-						if (tlen > 255) tlen = 255;
-						tname[0] = tlen;
+						if (tlen > 60) tlen = 60;
 						memcpy(tname + 1, prefs.theme_name, tlen);
-						SetDialogItemText(themeH, tname);
+						tname[0] = tlen;
 					}
-					/* reset bg/fg to "(Theme)" for new theme */
-					SetControlValue(bg_color_menu, 1);
-					SetControlValue(fg_color_menu, 1);
 				}
 			}
-		}
-		else if (item == 14)
-		{
-			/* Dark button pressed */
-			Handle themeH;
-			Rect themeBox;
-			init_dark_palette();
-			GetDialogItem(dlg, 13, &type, &themeH, &themeBox);
-			SetDialogItemText(themeH, "\pDefault Dark");
+			SetDialogItemText(theme_name_h, tname);
+			/* a new scheme uses its own background and text colours */
 			SetControlValue(bg_color_menu, 1);
 			SetControlValue(fg_color_menu, 1);
 		}
-		else if (item == 15)
+		else if (item == I_BOLD)
 		{
-			/* Light button pressed */
-			Handle themeH;
-			Rect themeBox;
-			init_light_palette();
-			GetDialogItem(dlg, 13, &type, &themeH, &themeBox);
-			SetDialogItemText(themeH, "\pDefault Light");
-			SetControlValue(bg_color_menu, 1);
-			SetControlValue(fg_color_menu, 1);
-		}
-		else if (item == 16)
-		{
-			/* toggle bold-is-bright checkbox */
 			SetControlValue(bold_bright_check, GetControlValue(bold_bright_check) ? 0 : 1);
 		}
-	} while(item != 1 && item != 11);
+	} while(item != I_OK && item != I_CANCEL);
 
-	/* save if OK'd */
-	if (item == 1)
+	if (item == I_OK)
 	{
 		/* read menu values into prefs */
 		prefs.display_mode = GetControlValue(term_type_menu) - 1;
@@ -952,6 +982,18 @@ void preferences_window(void)
 		set_terminal_string();
 		save_prefs();
 		update_console_colors(wc);
+	}
+	else
+	{
+		/* Cancel: put the colours back */
+		memcpy(prefs.palette, saved_palette, sizeof(saved_palette));
+		prefs.theme_fg = saved_fg;
+		prefs.theme_bg = saved_bg;
+		prefs.theme_cursor = saved_cursor;
+		prefs.orig_theme_fg = saved_ofg;
+		prefs.orig_theme_bg = saved_obg;
+		prefs.theme_loaded = saved_loaded;
+		memcpy(prefs.theme_name, saved_name, sizeof(saved_name));
 	}
 
 	/* clean it up */

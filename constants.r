@@ -105,6 +105,7 @@
 #define CNTL_PREF_BG_COLOR  129
 #define CNTL_PREF_TERM_TYPE 130
 #define CNTL_PREF_FONT_SIZE 131
+#define CNTL_PREF_SCHEME    132
 
 /* symbol font for box drawing / block elements / CP437 */
 #define SYMF_FAMILY_ID  29183
@@ -126,6 +127,10 @@
 #define MENU_COLOR     131
 #define MENU_TERM_TYPE 132
 #define MENU_FONT_SIZE 133
+#define MENU_SCHEME    134
+
+/* built-in colour schemes (MENU_SCHEME items before "Theme File...") */
+#define NUM_SCHEMES 6
 
 /* File menu item indices */
 #define FMENU_CONNECT     1

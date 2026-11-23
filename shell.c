@@ -546,8 +546,11 @@ static OSType str_to_ostype(const char* s)
 /* ------------------------------------------------------------------ */
 
 /* return ANSI color escape for a file entry */
+static int ls_use_color = 0;   /* ls -G / --color */
+
 static const char* ls_color(int is_dir, int is_locked, int is_invis, OSType ftype)
 {
+	if (!ls_use_color)         return "";
 	if (is_dir)                return "\033[1;34m"; /* bold blue */
 	if (is_invis)              return "\033[2m";     /* dim */
 	if (is_locked)             return "\033[1;31m"; /* bold red */
@@ -1019,15 +1022,19 @@ static void cmd_ls(int idx, int argc, char* argv[])
 	int path_count = 0;
 
 	/* parse flags, count paths */
+	ls_use_color = 0;
 	for (argi = 1; argi < argc; argi++)
 	{
-		if (argv[argi][0] == '-')
+		if (strcmp(argv[argi], "--color") == 0)
+			ls_use_color = 1;
+		else if (argv[argi][0] == '-')
 		{
 			char* f = argv[argi] + 1;
 			while (*f)
 			{
 				if (*f == 'l') long_fmt = 1;
 				else if (*f == 'a') show_all = 1;
+				else if (*f == 'G') ls_use_color = 1;
 				f++;
 			}
 		}
@@ -10984,7 +10991,15 @@ void shell_prompt(int idx)
 
 	get_dir_name(s->shell_vRefNum, s->shell_dirID, dirname, sizeof(dirname));
 
-	/* color: 0-7 = SGR 30-37, 8-15 = SGR 90-97 */
+	/* 0 = plain (the default) */
+	if (c <= 0 || c > 15)
+	{
+		vt_write(idx, dirname);
+		vt_write(idx, " $ ");
+		return;
+	}
+
+	/* color: 1-7 = SGR 31-37, 8-15 = SGR 90-97 */
 	if (c >= 8)
 		snprintf(esc, sizeof(esc), "\033[1;%dm", 90 + (c - 8));
 	else
@@ -11071,8 +11086,8 @@ void shell_init(int session_idx)
 	s->shell_saved_line[0] = '\0';
 	s->shell_saved_len = 0;
 
-	vt_write(session_idx, "\033[32mS\033[33me\033[31mv\033[35me\033[34mn\033[36mT\033[32mT\033[33mY\033[0m local shell\r\n");
-	vt_write(session_idx, "type 'help' for commands\r\n\r\n");
+	vt_write(session_idx, "MacShell " APP_VERSION "\r\n");
+	vt_write(session_idx, "Type 'help' for commands.\r\n\r\n");
 
 	shell_prompt(session_idx);
 }
