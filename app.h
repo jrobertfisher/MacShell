@@ -42,7 +42,7 @@ enum MOUSE_MODE { CLICK_SEND, CLICK_SELECT };
 enum SESSION_TYPE { SESSION_NONE, SESSION_SSH, SESSION_LOCAL, SESSION_TELNET };
 enum THREAD_COMMAND { WAIT, READ, EXIT };
 enum THREAD_STATE { UNINITIALIZED, OPEN, CLEANUP, DONE };
-enum WORKER_MODE { WORKER_NONE, WORKER_NC, WORKER_WGET, WORKER_SCP, WORKER_FTP };
+enum WORKER_MODE { WORKER_NONE, WORKER_NC, WORKER_WGET, WORKER_SCP, WORKER_FTP, WORKER_PING };
 /* interactive ftp session (ftp host) */
 enum FTP_MODE { FTP_MODE_OFF, FTP_MODE_ASK_USER, FTP_MODE_ASK_PASS, FTP_MODE_CONNECTING, FTP_MODE_READY };
 
@@ -158,6 +158,8 @@ struct session
 	char keygen_name[32];
 	char keygen_comment[64];
 	short keygen_vref;           /* folder the key files go in */
+	char ping_host[256];         /* ping: host and number of pings (0 = until Ctrl+C) */
+	long ping_count;
 	long keygen_dir;
 	char ftp_user[256];
 	char ftp_password[256];

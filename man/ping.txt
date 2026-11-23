@@ -2,15 +2,27 @@ NAME
     ping - check that a host answers
 
 SYNOPSIS
-    ping <host> [port]
+    ping [-c count] <host>
+    ping <host> <port>
 
 DESCRIPTION
-    Checks that a computer can be reached by making a TCP connection to
-    port (80 unless given) and reporting how long it took, in ms. It doesn't send
-    ICMP pings, so it works through firewalls that allow the port.
+    Sends ICMP echo requests (real pings) to host once a second and
+    shows each reply with its time in milliseconds, until you press
+    Ctrl+C or count replies are done. It then prints how many packets
+    were sent and received, and the minimum, average and maximum times.
+    host can be a name or an IP address.
+
+    With a port, ping instead makes a TCP connection to that port and
+    reports how long it took. This works through firewalls that block
+    ICMP but allow the port (for example 22 for SSH or 80 for web).
+
+OPTIONS
+    -c count  stop after count pings
 
 EXAMPLES
+    ping 192.168.0.1
+    ping -c 4 example.com
     ping 192.168.1.20 22
 
 SEE ALSO
-    host, nc
+    host, nc, ifconfig

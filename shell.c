@@ -26,6 +26,7 @@
 #include <Processes.h>
 #include <TextUtils.h>
 #include <Threads.h>
+#include <Timer.h>
 #include <Aliases.h>
 
 #include <mbedtls/md5.h>
@@ -3039,7 +3040,7 @@ static void cmd_ifconfig(int idx, int argc, char* argv[])
 		vt_write(idx, "No network interfaces found.\r\n");
 }
 
-static void cmd_ping(int idx, int argc, char* argv[])
+static void ping_tcp(int idx, const char* host, unsigned short port)
 {
 	/* TCP connect test — measures DNS + TCP handshake time */
 	EndpointRef ep;
@@ -3048,16 +3049,8 @@ static void cmd_ping(int idx, int argc, char* argv[])
 	DNSAddress hostDNSAddress;
 	char hostport[280];
 	long start_ticks, elapsed;
-	unsigned short port;
 
-	if (argc < 2)
-	{
-		vt_write(idx, "usage: ping <host> [port]  (TCP connect test, default port 80)\r\n");
-		return;
-	}
-
-	port = (argc >= 3) ? (unsigned short)atoi(argv[2]) : 80;
-	snprintf(hostport, sizeof(hostport), "%s:%d", argv[1], (int)port);
+	snprintf(hostport, sizeof(hostport), "%s:%d", host, (int)port);
 
 	if (InitOpenTransport() != noErr)
 	{
@@ -3118,6 +3111,294 @@ static void cmd_ping(int idx, int argc, char* argv[])
 
 	OTUnbind(ep);
 	OTCloseProvider(ep);
+}
+
+/* ---- ICMP echo (real ping) over Open Transport's raw IP provider ---- */
+
+static unsigned short icmp_checksum(const unsigned char* p, int n)
+{
+	unsigned long sum = 0;
+	int i;
+	for (i = 0; i + 1 < n; i += 2)
+		sum += ((unsigned long)p[i] << 8) | p[i + 1];
+	if (n & 1) sum += (unsigned long)p[n - 1] << 8;
+	while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+	return (unsigned short)~sum;
+}
+
+static unsigned long us_now(void)
+{
+	UnsignedWide w;
+	Microseconds(&w);
+	return w.lo;
+}
+
+static void print_ms(int idx, unsigned long us)
+{
+	printf_s(idx, "%lu.%lu", us / 1000, (us % 1000) / 100);
+}
+
+static void* ping_thread(void* arg)
+{
+	int idx = (int)(long)arg;
+	struct session* s = &sessions[idx];
+	EndpointRef ep = kOTInvalidEndpointRef;
+	OSStatus err;
+	InetHost dest = 0;
+	InetAddress bind_addr, to_addr, from_addr;
+	TBind req;
+	char ip[32];
+	unsigned short ident = (unsigned short)(TickCount() & 0xFFFF);
+	long seq, sent = 0, received = 0;
+	unsigned long rtt_min = 0xFFFFFFFFUL, rtt_max = 0, rtt_sum = 0;
+
+	/* resolve the name */
+	if (OTInetStringToHost(s->ping_host, &dest) != noErr)
+	{
+		InetSvcRef svc = OTOpenInternetServices(kDefaultInternetServicesPath, 0, &err);
+		InetHostInfo info;
+		if (err != noErr || svc == NULL)
+		{
+			printf_s(idx, "ping: cannot look up names (err=%d)\r\n", (int)err);
+			goto done;
+		}
+		OTSetSynchronous(svc);
+		OTSetBlocking(svc);
+		OTInstallNotifier(svc, shell_ot_timeout_notifier, nil);
+		OTUseSyncIdleEvents(svc, true);
+		ot_timeout_provider = svc;
+		ot_timeout_deadline = TickCount() + OT_TIMEOUT_TICKS;
+		err = OTInetStringToAddress(svc, s->ping_host, &info);
+		ot_timeout_deadline = 0;
+		ot_timeout_provider = nil;
+		OTCloseProvider(svc);
+		if (err != noErr || info.addrs[0] == 0)
+		{
+			printf_s(idx, "ping: cannot resolve %s%s\r\n", s->ping_host,
+			         err == kOTCanceledErr ? " (timed out)" : "");
+			goto done;
+		}
+		dest = info.addrs[0];
+	}
+	OTInetHostToString(dest, ip);
+
+	/* a raw IP endpoint bound to protocol 1 (ICMP) */
+	ep = OTOpenEndpoint(OTCreateConfiguration(kRawIPName), 0, nil, &err);
+	if (err != noErr)
+	{
+		printf_s(idx, "ping: raw IP not available (err=%d); try 'ping %s 80' (TCP)\r\n",
+		         (int)err, s->ping_host);
+		ep = kOTInvalidEndpointRef;
+		goto done;
+	}
+	OTInitInetAddress(&bind_addr, 1, 0);
+	OTMemzero(&req, sizeof req);
+	req.addr.buf = (UInt8*)&bind_addr;
+	req.addr.len = sizeof bind_addr;
+	err = OTBind(ep, &req, nil);
+	if (err != noErr)
+	{
+		printf_s(idx, "ping: cannot bind raw IP (err=%d); try 'ping %s 80' (TCP)\r\n",
+		         (int)err, s->ping_host);
+		goto done;
+	}
+	OTSetNonBlocking(ep);
+
+	printf_s(idx, "PING %s (%s): 56 data bytes\r\n", s->ping_host, ip);
+
+	for (seq = 0; s->ping_count == 0 || seq < s->ping_count; seq++)
+	{
+		unsigned char pkt[64];
+		TUnitData ud;
+		unsigned long t_sent, t_round;
+		int got = 0, i;
+		unsigned short ck;
+
+		if (s->thread_command == EXIT || !s->in_use) break;
+
+		/* echo request: type 8, code 0, checksum, id, sequence, 56 bytes */
+		memset(pkt, 0, sizeof pkt);
+		pkt[0] = 8;
+		pkt[4] = (unsigned char)(ident >> 8); pkt[5] = (unsigned char)ident;
+		pkt[6] = (unsigned char)(seq >> 8);   pkt[7] = (unsigned char)seq;
+		for (i = 8; i < 64; i++) pkt[i] = (unsigned char)i;
+		ck = icmp_checksum(pkt, 64);
+		pkt[2] = (unsigned char)(ck >> 8); pkt[3] = (unsigned char)ck;
+
+		OTInitInetAddress(&to_addr, 1, dest);
+		OTMemzero(&ud, sizeof ud);
+		ud.addr.buf = (UInt8*)&to_addr;
+		ud.addr.len = sizeof to_addr;
+		ud.udata.buf = pkt;
+		ud.udata.len = sizeof pkt;
+		t_sent = us_now();
+		t_round = TickCount();
+		err = OTSndUData(ep, &ud);
+		if (err != noErr)
+		{
+			printf_s(idx, "ping: send failed (err=%d)\r\n", (int)err);
+			break;
+		}
+		sent++;
+
+		/* wait up to a second for the reply */
+		while (!got && TickCount() - t_round < 60)
+		{
+			unsigned char buf[1600];
+			OTFlags flags = 0;
+			OTResult r;
+
+			if (s->thread_command == EXIT || !s->in_use) break;
+			OTMemzero(&ud, sizeof ud);
+			ud.addr.buf = (UInt8*)&from_addr;
+			ud.addr.maxlen = sizeof from_addr;
+			ud.udata.buf = buf;
+			ud.udata.maxlen = sizeof buf;
+			r = OTRcvUData(ep, &ud, &flags);
+			if (r == kOTNoDataErr) { YieldToAnyThread(); continue; }
+			if (r == kOTLookErr)
+			{
+				if (OTLook(ep) == T_UDERR) OTRcvUDErr(ep, NULL);
+				continue;
+			}
+			if (r != noErr) { YieldToAnyThread(); continue; }
+			{
+				unsigned char* p = buf;
+				long n = ud.udata.len;
+				int ttl = -1;
+				char from[32];
+				/* replies may include the IP header */
+				if (n >= 20 && (p[0] >> 4) == 4)
+				{
+					int ihl = (p[0] & 0x0F) * 4;
+					ttl = p[8];
+					OTInetHostToString(((InetHost)p[12] << 24) | ((InetHost)p[13] << 16) |
+					                   ((InetHost)p[14] << 8) | (InetHost)p[15], from);
+					p += ihl;
+					n -= ihl;
+				}
+				else
+					OTInetHostToString(from_addr.fHost, from);
+				if (n < 8) continue;
+				if (p[0] == 0 && ((p[4] << 8) | p[5]) == ident && ((p[6] << 8) | p[7]) == (seq & 0xFFFF))
+				{
+					unsigned long rtt = us_now() - t_sent;
+					received++;
+					rtt_sum += rtt;
+					if (rtt < rtt_min) rtt_min = rtt;
+					if (rtt > rtt_max) rtt_max = rtt;
+					printf_s(idx, "%ld bytes from %s: icmp_seq=%ld", n, from, seq);
+					if (ttl >= 0) printf_s(idx, " ttl=%d", ttl);
+					vt_write(idx, " time=");
+					print_ms(idx, rtt);
+					vt_write(idx, " ms\r\n");
+					got = 1;
+				}
+				else if (p[0] == 3 || p[0] == 11)
+				{
+					/* unreachable / time exceeded, quoting our packet */
+					if (n >= 36 && p[8 + 9] == 1 && ((p[28 + 4] << 8) | p[28 + 5]) == ident)
+					{
+						printf_s(idx, "From %s: icmp_seq=%ld %s\r\n", from, seq,
+						         p[0] == 11 ? "Time to live exceeded" : "Destination unreachable");
+						got = 1;
+					}
+				}
+			}
+		}
+		if (s->thread_command == EXIT || !s->in_use) break;
+		if (!got)
+			printf_s(idx, "Request timeout for icmp_seq %ld\r\n", seq);
+
+		/* one ping a second */
+		if (s->ping_count == 0 || seq + 1 < s->ping_count)
+			while (TickCount() - t_round < 60 && s->thread_command != EXIT && s->in_use)
+				YieldToAnyThread();
+	}
+
+	if (s->in_use && sent > 0)
+	{
+		printf_s(idx, "\r\n--- %s ping statistics ---\r\n", s->ping_host);
+		printf_s(idx, "%ld packets transmitted, %ld received, %ld%% packet loss\r\n",
+		         sent, received, (sent - received) * 100 / sent);
+		if (received > 0)
+		{
+			vt_write(idx, "round-trip min/avg/max = ");
+			print_ms(idx, rtt_min); vt_write(idx, "/");
+			print_ms(idx, rtt_sum / received); vt_write(idx, "/");
+			print_ms(idx, rtt_max); vt_write(idx, " ms\r\n");
+		}
+	}
+
+done:
+	if (ep != kOTInvalidEndpointRef)
+	{
+		OTUnbind(ep);
+		OTCloseProvider(ep);
+	}
+	s->worker_mode = WORKER_NONE;
+	s->thread_state = DONE;
+	s->thread_command = WAIT;
+	if (s->in_use && s->type == SESSION_LOCAL)
+		shell_prompt(idx);
+	return 0;
+}
+
+/* ping [-c count] host    ICMP echo, until Ctrl+C or count replies
+   ping host port          TCP connection test */
+static void cmd_ping(int idx, int argc, char* argv[])
+{
+	struct session* s = &sessions[idx];
+	const char* host = NULL;
+	const char* port = NULL;
+	long count = 0;
+	int i;
+	ThreadID tid = kNoThreadID;
+	OSErr err;
+
+	for (i = 1; i < argc; i++)
+	{
+		if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) count = atol(argv[++i]);
+		else if (argv[i][0] == '-') { host = NULL; break; }
+		else if (!host) host = argv[i];
+		else if (!port) port = argv[i];
+		else { host = NULL; break; }
+	}
+	if (!host)
+	{
+		vt_write(idx, "usage: ping [-c count] <host>     ICMP echo (Ctrl+C stops)\r\n"
+		              "       ping <host> <port>         TCP connection test\r\n");
+		return;
+	}
+	if (InitOpenTransport() != noErr)
+	{
+		vt_write(idx, "ping: Open Transport not available\r\n");
+		return;
+	}
+	if (port)
+	{
+		ping_tcp(idx, host, (unsigned short)atoi(port));
+		return;
+	}
+
+	copy_cstr_trunc(s->ping_host, sizeof s->ping_host, host);
+	s->ping_count = count < 0 ? 0 : count;
+	if (s->thread_state == DONE && s->thread_id != kNoThreadID)
+		session_reap_thread(idx, 0);
+	s->thread_command = READ;
+	s->thread_state = OPEN;
+	err = NewThread(kCooperativeThread, ping_thread, (void*)(long)idx,
+	                THREAD_STACK_WORKER, kCreateIfNeeded, NULL, &tid);
+	if (err != noErr)
+	{
+		s->thread_command = WAIT;
+		s->thread_state = DONE;
+		s->thread_id = kNoThreadID;
+		printf_s(idx, "ping: cannot start (err=%d)\r\n", (int)err);
+		return;
+	}
+	s->thread_id = tid;
+	s->worker_mode = WORKER_PING;
 }
 
 static void cmd_colors(int idx, int argc, char* argv[])
