@@ -9,6 +9,7 @@
 #include "net.h"
 #include "console.h"
 #include "debug.h"
+#include "macentropy.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -651,6 +652,12 @@ int init_connection(int session_idx, char* hostname)
 
 	sndCall.addr.buf = (UInt8 *) &hostDNSAddress;
 	sndCall.addr.len = OTInitDNSAddress(&hostDNSAddress, (char *) hostname);
+
+	if (!macentropy_get_stats()->ready)
+	{
+		printf_s(session_idx, "Not enough randomness for a secure connection. Restart MacShell and move the mouse when asked.\r\n");
+		return 0;
+	}
 
 	printf_s(session_idx, "Connecting to endpoint \"%s\"... ", hostname); YieldToAnyThread();
 	err = OTConnect(s->endpoint, &sndCall, nil);

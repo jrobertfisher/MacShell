@@ -10,6 +10,7 @@
 
 #include "app.h"
 #include "shell.h"
+#include "macentropy.h"
 #include "console.h"
 #include "debug.h"
 #include "net.h"
@@ -2284,6 +2285,38 @@ static void cmd_date(int idx, int argc, char* argv[])
 		dt.day, dt.hour, dt.minute, dt.second, dt.year);
 
 	vt_write(idx, buf);
+}
+
+/* entropy: show where MacShell's randomness came from */
+static void cmd_entropy(int idx, int argc, char* argv[])
+{
+	const macentropy_stats *st = macentropy_get_stats();
+
+	vt_write(idx, "Randomness for SSH and TLS (needs ");
+	vt_print_long(idx, MACENTROPY_REQUIRED_BITS);
+	vt_write(idx, " bits):\r\n");
+
+	vt_write(idx, "  sound input   ");
+	if (!st->sound_available) vt_write(idx, "not available\r\n");
+	else if (!st->sound_passed) vt_write(idx, "failed health tests (silent or patterned), 0 bits\r\n");
+	else { vt_print_long(idx, st->sound_bits); vt_write(idx, " bits\r\n"); }
+
+	vt_write(idx, "  clock jitter  ");
+	if (!st->jitter_passed) vt_write(idx, "failed health tests, 0 bits\r\n");
+	else { vt_print_long(idx, st->jitter_bits); vt_write(idx, " bits\r\n"); }
+
+	vt_write(idx, "  seed file     ");
+	vt_write(idx, st->seed_valid ? "valid (counts as 256 bits)\r\n" : "none yet\r\n");
+
+	if (st->human_bits > 0) {
+		vt_write(idx, "  mouse/keys    ");
+		vt_print_long(idx, st->human_bits);
+		vt_write(idx, " bits (fallback)\r\n");
+	}
+
+	vt_write(idx, "  total         ");
+	vt_print_long(idx, st->total_bits);
+	vt_write(idx, st->ready ? " bits: ready\r\n" : " bits: NOT ready (SSH and HTTPS disabled)\r\n");
 }
 
 static void cmd_uname(int idx, int argc, char* argv[])
@@ -5804,6 +5837,9 @@ retry_redirect:
 		int ret;
 		unsigned long hs_deadline = TickCount() + 1800; /* 30 sec */
 
+		vt_write(idx, "wget: WARNING: https certificate NOT verified (no certificate store on\r\n"
+		              "      classic Mac OS). The connection is encrypted, but the site\r\n"
+		              "      could be impersonated.\r\n");
 		vt_write(idx, "TLS handshake... ");
 
 		mbedtls_ssl_init(&ssl);
@@ -5811,7 +5847,19 @@ retry_redirect:
 		mbedtls_ctr_drbg_init(&ctr_drbg);
 		mbedtls_entropy_init(&entropy);
 
-		mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy, NULL, 0);
+		if (mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy, NULL, 0) != 0)
+		{
+			vt_write(idx, "failed: not enough randomness for TLS.\r\n");
+			mbedtls_ssl_free(&ssl);
+			mbedtls_ssl_config_free(&ssl_conf);
+			mbedtls_ctr_drbg_free(&ctr_drbg);
+			mbedtls_entropy_free(&entropy);
+			OTSndOrderlyDisconnect(ep);
+			OTUnbind(ep);
+			OTCloseProvider(ep);
+			s->endpoint = kOTInvalidEndpointRef;
+			return;
+		}
 
 		mbedtls_ssl_config_defaults(&ssl_conf,
 		                            MBEDTLS_SSL_IS_CLIENT,
@@ -9480,7 +9528,7 @@ static int escape_and_append(char* line, int pos, int max, const char* src, int 
 static const char* shell_commands[] = {
 	"basename", "cal", "cat", "cd", "chattr", "chmod", "chown", "clear",
 	"cls", "cmp", "colors", "copy", "cp", "crc32", "cut", "date", "del",
-	"delete", "df", "dir", "dirname", "dos2unix", "echo", "exit", "file",
+	"delete", "df", "dir", "dirname", "dos2unix", "echo", "entropy", "exit", "file",
 	"fixtype", "fold", "free", "ftp", "getinfo", "grep", "head", "help", "hexdump",
 	"history", "host", "hostname", "ifconfig", "info", "label", "less",
 	"ln", "ls", "mac2unix", "md", "md5sum", "mkdir", "more", "mv", "nc",
@@ -10107,6 +10155,7 @@ static void shell_execute(int idx, char* line)
 	else if (strcmp(cmd, "df") == 0)         cmd_df(idx, argc, argv);
 	else if (strcmp(cmd, "date") == 0)       cmd_date(idx, argc, argv);
 	else if (strcmp(cmd, "uname") == 0)      cmd_uname(idx, argc, argv);
+	else if (strcmp(cmd, "entropy") == 0)    cmd_entropy(idx, argc, argv);
 	else if (strcmp(cmd, "free") == 0)       cmd_free(idx, argc, argv);
 	else if (strcmp(cmd, "ps") == 0)         cmd_ps(idx, argc, argv);
 	else if (strcmp(cmd, "ssh") == 0)        cmd_ssh(idx, argc, argv);

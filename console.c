@@ -5,6 +5,7 @@
  * See LICENSE file for details
  */
 
+#include <stdio.h>
 #include "app.h"
 #include "console.h"
 #include "net.h"

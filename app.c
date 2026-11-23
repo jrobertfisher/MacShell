@@ -11,6 +11,7 @@
 #include "telnet.h"
 #include "shell.h"
 #include "debug.h"
+#include "macentropy.h"
 
 #include <Threads.h>
 #include <MacMemory.h>
@@ -3015,6 +3016,11 @@ int main(int argc, char** argv)
 	InitFonts();
 	InitWindows();
 	InitMenus();
+
+	// gather randomness for SSH/TLS (sound input + clock jitter; asks for
+	// mouse/keyboard input only if those give less than 256 bits). If the user
+	// cancels, the local shell still works but SSH and HTTPS refuse to start.
+	macentropy_init();
 
 	void* menu = GetNewMBar(MBAR_MAIN);
 	SetMenuBar(menu);
