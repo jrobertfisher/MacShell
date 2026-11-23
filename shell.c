@@ -12,6 +12,7 @@
 #include "app.h"
 #include "shell.h"
 #include "macentropy.h"
+#include "sshd.h"
 #include "console.h"
 #include "debug.h"
 #include "net.h"
@@ -140,12 +141,12 @@ static void vt_write_mr(int idx, const char* s, size_t len)
 		}
 		if (bi >= 508)
 		{
-			vterm_input_write(vt, buf, bi);
+			{ if (sessions[idx].sshd_tap) sshd_output(idx, buf, bi); vterm_input_write(vt, buf, bi); }
 			bi = 0;
 		}
 	}
 	if (bi > 0)
-		vterm_input_write(vt, buf, bi);
+		{ if (sessions[idx].sshd_tap) sshd_output(idx, buf, bi); vterm_input_write(vt, buf, bi); }
 }
 
 static void redir_write(int idx, const char* s, size_t len)
@@ -192,7 +193,7 @@ static void vt_char(int idx, char c)
 	if (!sessions[idx].vterm) return;
 	if (uc < 0x80)
 	{
-		vterm_input_write(sessions[idx].vterm, &c, 1);
+		{ if (sessions[idx].sshd_tap) sshd_output(idx, &c, 1); vterm_input_write(sessions[idx].vterm, &c, 1); }
 	}
 	else
 	{
@@ -217,7 +218,7 @@ static void vt_char(int idx, char c)
 			buf[2] = 0x80 | (cp & 0x3F);
 			len = 3;
 		}
-		vterm_input_write(sessions[idx].vterm, buf, len);
+		{ if (sessions[idx].sshd_tap) sshd_output(idx, buf, len); vterm_input_write(sessions[idx].vterm, buf, len); }
 	}
 }
 
@@ -9521,6 +9522,40 @@ static void cmd_ssh_keygen(int idx, int argc, char* argv[])
 }
 
 /* ------------------------------------------------------------------ */
+/* for the SSH server: run a command line, and is the tab still busy? */
+/* ------------------------------------------------------------------ */
+
+void shell_run_line(int idx, char* line)
+{
+	shell_execute(idx, line);
+}
+
+int shell_is_busy(int idx)
+{
+	struct session* s = &sessions[idx];
+	if (!s->in_use) return 0;
+	return local_shell_worker_active(s) || s->ftp_mode != FTP_MODE_OFF ||
+	       s->keygen_stage != 0 || s->hide_input || s->worker_mode == WORKER_NC;
+}
+
+/* sshd start [port] | stop | status */
+static void cmd_sshd(int idx, int argc, char* argv[])
+{
+	if (argc >= 2 && strcmp(argv[1], "start") == 0)
+	{
+		long port = argc >= 3 ? atol(argv[2]) : 22;
+		if (port < 1 || port > 65535) { vt_write(idx, "sshd: bad port\r\n"); return; }
+		sshd_start(idx, (unsigned short)port);
+	}
+	else if (argc == 2 && strcmp(argv[1], "stop") == 0)
+		sshd_stop(idx);
+	else if (argc == 1 || (argc == 2 && strcmp(argv[1], "status") == 0))
+		sshd_status(idx);
+	else
+		vt_write(idx, "usage: sshd start [port] | stop | status\r\n");
+}
+
+/* ------------------------------------------------------------------ */
 /* ftp command entry point                                            */
 /* ------------------------------------------------------------------ */
 
@@ -11498,7 +11533,7 @@ static const char* shell_commands[] = {
 	"nl", "open", "ping", "ps", "pwd", "quit", "rd", "readlink",
 	"realpath", "ren", "rename", "rev", "rm", "rmdir", "rot13", "scp", "seq",
 	"setcreator", "settype", "sha1sum", "sha256sum", "sha512sum", "sleep",
-	"ssh", "ssh-keygen", "strings", "tail", "telnet", "touch", "type", "uname",
+	"ssh", "ssh-keygen", "sshd", "strings", "tail", "telnet", "touch", "type", "uname",
 	"unix2dos", "unix2mac", "uptime", "wc", "wget", "which", "xxd"
 };
 #define NUM_SHELL_COMMANDS (sizeof(shell_commands) / sizeof(shell_commands[0]))
@@ -12149,6 +12184,7 @@ static void shell_execute(int idx, char* line)
 	else if (strcmp(cmd, "uname") == 0)      cmd_uname(idx, argc, argv);
 	else if (strcmp(cmd, "curl") == 0)       cmd_wget(idx, argc, argv);
 	else if (strcmp(cmd, "ssh-keygen") == 0) cmd_ssh_keygen(idx, argc, argv);
+	else if (strcmp(cmd, "sshd") == 0)       cmd_sshd(idx, argc, argv);
 	else if (strcmp(cmd, "entropy") == 0)    cmd_entropy(idx, argc, argv);
 	else if (strcmp(cmd, "free") == 0)       cmd_free(idx, argc, argv);
 	else if (strcmp(cmd, "ps") == 0)         cmd_ps(idx, argc, argv);
@@ -12341,6 +12377,11 @@ void shell_init(int session_idx)
 	struct session* s = &sessions[session_idx];
 	short vRef;
 	long dID;
+
+	/* a tab opened for an incoming SSH connection */
+	s->sshd_owned = 0;
+	s->sshd_tap = 0;
+	sshd_claim_session(session_idx);
 
 	/* start in ~ (Documents on the startup disk), like a Unix shell */
 	s->shell_at_root = 0;

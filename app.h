@@ -149,6 +149,8 @@ struct session
 	char ftp_cmdline[256];       /* command for the ftp worker thread */
 	int hide_input;              /* typing a password: no echo, no history */
 	int shell_at_root;           /* cwd is "/", the list of disks */
+	int sshd_owned;              /* this tab belongs to an incoming SSH connection */
+	int sshd_tap;                /* send its output to that connection */
 	int shell_has_prev;          /* cd -: the previous folder */
 	int shell_prev_at_root;
 	short shell_prev_vRefNum;

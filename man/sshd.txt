@@ -1,0 +1,41 @@
+NAME
+    sshd - let other computers log in to MacShell over SSH
+
+SYNOPSIS
+    sshd start [port]
+    sshd stop
+    sshd status
+
+DESCRIPTION
+    Runs a small SSH server in the background (port 22 unless given), so
+    you can log in to this Mac from another computer with ssh. It is off
+    until you start it, and stops when MacShell quits.
+
+    Logins use keys only, never passwords: the public key must be a line
+    in ~/.ssh/authorized_keys on this Mac (ECDSA P-256 or RSA of 2048
+    bits or more). Ed25519 keys aren't supported. One connection at a
+    time; each opens its own MacShell tab, which closes when the other
+    computer logs out. A command given to ssh runs and returns:
+        ssh user@mac 'ls -l'
+
+    The first start makes this Mac's host key (ECDSA P-256), kept in
+    Preferences:MacShell SSH Host Key. sshd start and sshd status show
+    its fingerprint; check it against what ssh shows on first connecting.
+
+    Security: ECDH P-256 key exchange with strict key exchange (against
+    the Terrapin attack), AES-128-CTR with HMAC-SHA-256 (encrypt then
+    MAC). Logins that don't finish within two minutes are dropped, and
+    so are clients after 10 rejected keys.
+
+OPTIONS
+    start [port]  start listening (port 22 unless given)
+    stop          stop the server and end any connection
+    status        show the port, host key and current connection
+
+EXAMPLES
+    sshd start
+    cat laptop.pub >> ~/.ssh/authorized_keys
+    sshd status
+
+SEE ALSO
+    ssh, ssh-keygen, entropy

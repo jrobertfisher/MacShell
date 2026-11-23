@@ -14,3 +14,7 @@ void shell_prompt(int idx);
 /* Documents:.ssh on the startup volume (where ssh-keygen saves keys).
    Creates the folders if create is set. Returns 1 on success. */
 int ssh_key_folder(short* vRefNum, long* dirID, int create);
+
+/* for the SSH server */
+void shell_run_line(int idx, char* line);
+int shell_is_busy(int idx);

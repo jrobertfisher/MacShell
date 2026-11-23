@@ -12,6 +12,7 @@
 #include "shell.h"
 #include "debug.h"
 #include "macentropy.h"
+#include "sshd.h"
 
 #include <Threads.h>
 #include <MacMemory.h>
@@ -1318,6 +1319,8 @@ void close_session(int idx)
 	if (wc == NULL) return;
 	if (wc->num_sessions <= 1) return; // don't close the last session in a window
 
+	sshd_session_closing(idx);
+
 	// disconnect networked sessions (waits for thread to reach DONE)
 	if (sessions[idx].type == SESSION_SSH &&
 		(sessions[idx].thread_state != DONE || sessions[idx].thread_id != kNoThreadID))
@@ -2128,10 +2131,12 @@ void event_loop(void)
 	do
 	{
 		// wait to get a GUI event
+		sshd_tick();
 		while (!WaitNextEvent(everyEvent, &event,
-		                      has_active_local_worker() ? 1 : sleep_time, NULL))
+		                      (has_active_local_worker() || sshd_running()) ? 1 : sleep_time, NULL))
 		{
 			YieldToAnyThread();
+			sshd_tick();
 			reap_detached_sessions();
 
 			// iterate all windows for idle tasks

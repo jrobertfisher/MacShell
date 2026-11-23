@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include "app.h"
+#include "sshd.h"
 #include "console.h"
 #include "net.h"
 #include "telnet.h"
@@ -1748,7 +1749,10 @@ void printf_s(int session_idx, const char* str, ...)
 
 	/* write to terminal (unless quiet redirect) */
 	if (!s->redir_quiet)
+	{
+		if (s->sshd_tap) sshd_output(session_idx, buf, len);
 		vterm_input_write(s->vterm, buf, len);
+	}
 }
 
 int bell(void* user)

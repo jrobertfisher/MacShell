@@ -13,7 +13,7 @@ add_custom_command(
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_man.py ${CMAKE_CURRENT_BINARY_DIR}/man.r ${MAN_PAGES}
     DEPENDS ${MAN_PAGES} ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_man.py)
 
-add_application(MacShell CREATOR "MShl" app.c console.c resources.r symbolfont.r ${CMAKE_CURRENT_BINARY_DIR}/man.r net.c telnet.c debug.c shell.c macentropy.c)
+add_application(MacShell CREATOR "MShl" app.c console.c resources.r symbolfont.r ${CMAKE_CURRENT_BINARY_DIR}/man.r net.c telnet.c debug.c shell.c macentropy.c sshd.c)
 
 # MacShell's mbedTLS settings (applied on top of mbedTLS's defaults) and the
 # Open Transport switch for libssh2. Both libraries are built with 68020 code.
