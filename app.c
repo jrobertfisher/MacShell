@@ -308,6 +308,21 @@ have_file:
 	return 1;
 }
 
+/* The connection settings are Pascal strings (length byte first) that the
+   SSH code also reads as C strings from p + 1. GetDialogItemText only sets
+   the length, so a shorter entry would leave the end of an older one behind
+   (typing "rob" over "jsmith" gave "bobith"). Always terminate them. */
+static void pstr_terminate(unsigned char* p, int bufsize)
+{
+	int len = p[0];
+	if (len > bufsize - 2)
+	{
+		len = bufsize - 2;
+		p[0] = (unsigned char)len;
+	}
+	memset(p + 1 + len, 0, bufsize - 1 - len);
+}
+
 // check if the main device is black and white
 int detect_color_screen(void)
 {
@@ -610,7 +625,9 @@ void load_prefs(void)
 
 	memcpy(prefs.hostname, dp->hostname, 512);
 	memcpy(prefs.username, dp->username, 256);
+	pstr_terminate((unsigned char*)prefs.username, sizeof(prefs.username));
 	memcpy(prefs.port, dp->port, 256);
+	pstr_terminate((unsigned char*)prefs.port, sizeof(prefs.port));
 
 	/* alloc and copy key paths */
 	prefs.privkey_path = malloc(1024);
@@ -2436,6 +2453,7 @@ int password_dialog(int dialog_resource)
 	// read out of the hidden text box
 	GetDialogItem(dlog, 5, &type, &itemH, &box);
 	GetDialogItemText(itemH, (unsigned char*)prefs.password);
+	pstr_terminate((unsigned char*)prefs.password, sizeof(prefs.password));
 	prefs.auth_type = USE_PASSWORD;
 
 	DisposeDialog(dlog);
@@ -2547,6 +2565,23 @@ Handle *fullPath)		/* Handle to path. */
 	return err;
 }
 
+/* Does this private key file need a passphrase? PEM keys say so in their
+   header ("Proc-Type: 4,ENCRYPTED" or "BEGIN ENCRYPTED PRIVATE KEY").
+   OpenSSH-format keys can't be told apart without decoding, so ask. */
+static int key_file_needs_passphrase(const char* path)
+{
+	char buf[1024];
+	size_t n;
+	FILE* f = fopen(path, "rb");
+	if (f == NULL) return 1;
+	n = fread(buf, 1, sizeof(buf) - 1, f);
+	fclose(f);
+	buf[n] = '\0';
+	if (strstr(buf, "ENCRYPTED") != NULL) return 1;
+	if (strstr(buf, "BEGIN OPENSSH PRIVATE KEY") != NULL) return 1;
+	return strstr(buf, "PRIVATE KEY-----") == NULL;   /* not a key we recognise: ask */
+}
+
 int key_dialog(void)
 {
 	Handle full_path = NULL;
@@ -2593,8 +2628,15 @@ int key_dialog(void)
 		DisposeHandle(full_path);
 	}
 
-	// get the key decryption password
-	if (!password_dialog(DLOG_KEY_PASSWORD)) return 0;
+	// ask for the key's passphrase only if the key is encrypted
+	if (key_file_needs_passphrase(prefs.privkey_path))
+	{
+		if (!password_dialog(DLOG_KEY_PASSWORD)) return 0;
+	}
+	else
+	{
+		memset(prefs.password, 0, sizeof(prefs.password));
+	}
 
 	prefs.auth_type = USE_KEY;
 	return 1;
@@ -2683,6 +2725,7 @@ int intro_dialog(void)
 	// copy the text out of the boxes
 	GetDialogItemText((Handle)address_text_box, (unsigned char *)prefs.hostname);
 	GetDialogItemText((Handle)username_text_box, (unsigned char *)prefs.username);
+	pstr_terminate((unsigned char*)prefs.username, sizeof(prefs.username));
 
 	// sanitize hostname: only allow valid DNS chars (a-z, 0-9, '.', '-')
 	{
@@ -2697,6 +2740,7 @@ int intro_dialog(void)
 				prefs.hostname[dst++] = c;
 		}
 		prefs.hostname[0] = dst - 1;
+		pstr_terminate((unsigned char*)prefs.hostname, sizeof(prefs.hostname));
 	}
 
 	// read port into a temp pascal string, sanitize to digits only
@@ -2717,6 +2761,7 @@ int intro_dialog(void)
 		// copy sanitized port into prefs.port
 		prefs.port[0] = raw_port[0];
 		memcpy(prefs.port + 1, raw_port + 1, raw_port[0]);
+		pstr_terminate((unsigned char*)prefs.port, sizeof(prefs.port));
 	}
 
 	// build combined "hostname:port" C string in prefs.hostname buffer
