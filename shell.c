@@ -7792,6 +7792,8 @@ static int ftp_download(int idx, EndpointRef ctrl_ep,
 
 /* FTP upload: STOR a local file over a PASV data connection.
    returns 1 on success, 0 on failure. */
+static void ftp_print_reply(int idx, const char* resp);
+
 static int ftp_upload(int idx, EndpointRef ctrl_ep,
                       const char* remote_path, FSSpec* local_spec,
                       long file_size, int no_progress)
@@ -7851,7 +7853,10 @@ static int ftp_upload(int idx, EndpointRef ctrl_ep,
 	code = ftp_command(idx, ctrl_ep, cmd, resp, sizeof(resp));
 	if (code != 150 && code != 125)
 	{
-		printf_s(idx, "ftp: STOR failed (%d)\r\n", code);
+		if (code > 0)
+			ftp_print_reply(idx, resp);              /* e.g. "553 Could not create file." */
+		else
+			printf_s(idx, "ftp: STOR failed (%d)\r\n", code);
 		ftp_tcp_close(data_ep);
 		upload_close(&src);
 		return 0;
