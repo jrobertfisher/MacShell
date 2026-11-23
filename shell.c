@@ -5812,6 +5812,143 @@ fail:
 	return 0;
 }
 
+/* Upload source: the data fork as it is, or, for a file with a resource
+   fork, a MacBinary II stream (header, data fork, resource fork, each
+   padded to 128 bytes) so nothing is lost on a non-Mac server. */
+struct upload_src
+{
+	int macbinary;
+	short dref, rref;
+	long dlen, rlen, total, pos;
+	unsigned char hdr[128];
+};
+
+static void put_be32(unsigned char* p, unsigned long v)
+{
+	p[0] = (unsigned char)(v >> 24); p[1] = (unsigned char)(v >> 16);
+	p[2] = (unsigned char)(v >> 8);  p[3] = (unsigned char)v;
+}
+
+static OSErr upload_open(FSSpec* spec, struct upload_src* u)
+{
+	CInfoPBRec pb;
+	OSErr err;
+	unsigned short crc;
+
+	memset(u, 0, sizeof *u);
+	memset(&pb, 0, sizeof pb);
+	pb.hFileInfo.ioNamePtr = spec->name;
+	pb.hFileInfo.ioVRefNum = spec->vRefNum;
+	pb.hFileInfo.ioDirID = spec->parID;
+	err = PBGetCatInfoSync(&pb);
+	if (err != noErr) return err;
+	if (pb.hFileInfo.ioFlAttrib & 0x10) return notAFileErr;
+
+	u->dlen = pb.hFileInfo.ioFlLgLen;
+	u->rlen = pb.hFileInfo.ioFlRLgLen;
+	u->macbinary = (u->rlen > 0);
+
+	err = FSpOpenDF(spec, fsRdPerm, &u->dref);
+	if (err != noErr) return err;
+	if (!u->macbinary)
+	{
+		u->total = u->dlen;
+		return noErr;
+	}
+	err = FSpOpenRF(spec, fsRdPerm, &u->rref);
+	if (err != noErr)
+	{
+		FSClose(u->dref);
+		u->dref = 0;
+		return err;
+	}
+
+	/* MacBinary II header */
+	u->hdr[1] = spec->name[0] > 63 ? 63 : spec->name[0];
+	memcpy(u->hdr + 2, spec->name + 1, u->hdr[1]);
+	put_be32(u->hdr + 65, pb.hFileInfo.ioFlFndrInfo.fdType);
+	put_be32(u->hdr + 69, pb.hFileInfo.ioFlFndrInfo.fdCreator);
+	u->hdr[73] = (unsigned char)(pb.hFileInfo.ioFlFndrInfo.fdFlags >> 8);
+	u->hdr[101] = (unsigned char)(pb.hFileInfo.ioFlFndrInfo.fdFlags & 0xFF);
+	put_be32(u->hdr + 83, u->dlen);
+	put_be32(u->hdr + 87, u->rlen);
+	put_be32(u->hdr + 91, pb.hFileInfo.ioFlCrDat);
+	put_be32(u->hdr + 95, pb.hFileInfo.ioFlMdDat);
+	u->hdr[122] = 129;                                   /* written as MacBinary II */
+	u->hdr[123] = 129;                                   /* readable by MacBinary II */
+	crc = macbin_crc16(u->hdr, 124);
+	u->hdr[124] = (unsigned char)(crc >> 8);
+	u->hdr[125] = (unsigned char)crc;
+	u->total = 128 + ((u->dlen + 127) & ~127L) + ((u->rlen + 127) & ~127L);
+	return noErr;
+}
+
+/* read the next part of the stream; returns bytes read (0 at the end), -1 on error */
+static long upload_read(struct upload_src* u, char* buf, long want)
+{
+	long done = 0;
+	if (!u->macbinary)
+	{
+		long n = want;
+		OSErr err = FSRead(u->dref, &n, buf);
+		if (err != noErr && err != eofErr) return -1;
+		u->pos += n;
+		return n;
+	}
+	while (done < want && u->pos < u->total)
+	{
+		long dpad = (u->dlen + 127) & ~127L;
+		long p = u->pos, n;
+		if (p < 128)
+		{
+			n = 128 - p;
+			if (n > want - done) n = want - done;
+			memcpy(buf + done, u->hdr + p, n);
+		}
+		else if (p < 128 + u->dlen || (p >= 128 + dpad && p < 128 + dpad + u->rlen))
+		{
+			int in_data = p < 128 + u->dlen;
+			long end = in_data ? 128 + u->dlen : 128 + dpad + u->rlen;
+			OSErr err;
+			n = end - p;
+			if (n > want - done) n = want - done;
+			err = FSRead(in_data ? u->dref : u->rref, &n, buf + done);
+			if (err != noErr && err != eofErr) return -1;
+			if (n == 0) return -1;                       /* file shrank */
+		}
+		else
+		{
+			/* zero padding up to the next 128-byte boundary */
+			long end = p < 128 + dpad ? 128 + dpad : u->total;
+			n = end - p;
+			if (n > want - done) n = want - done;
+			memset(buf + done, 0, n);
+		}
+		done += n;
+		u->pos += n;
+	}
+	return done;
+}
+
+static void upload_close(struct upload_src* u)
+{
+	if (u->dref) FSClose(u->dref);
+	if (u->rref) FSClose(u->rref);
+	u->dref = u->rref = 0;
+}
+
+/* remote name for a MacBinary upload: add .bin unless it's there already */
+static void upload_bin_name(char* path, int size)
+{
+	int n = strlen(path);
+	if (n == 0 || path[n - 1] == '/') return;
+	if (n >= 4 && (path[n - 4] == '.') &&
+	    tolower((unsigned char)path[n - 3]) == 'b' && tolower((unsigned char)path[n - 2]) == 'i' &&
+	    tolower((unsigned char)path[n - 1]) == 'n')
+		return;
+	if (n + 4 < size) strcat(path, ".bin");
+}
+
 static void extract_filename(const char* url_path, const char* headers,
                              char* out, int maxlen)
 {
@@ -7664,7 +7801,8 @@ static int ftp_upload(int idx, EndpointRef ctrl_ep,
 	char cmd[600];
 	int code;
 	EndpointRef data_ep = kOTInvalidEndpointRef;
-	short in_ref = 0;
+	struct upload_src src;
+	char remote[520];
 	long total_sent = 0;
 	long next_progress_bytes = 524288L;
 	long bytes_since_yield = 0;
@@ -7682,37 +7820,44 @@ static int ftp_upload(int idx, EndpointRef ctrl_ep,
 		return 0;
 	}
 
-	/* open local file */
-	ferr = FSpOpenDF(local_spec, fsRdPerm, &in_ref);
+	/* open local file (MacBinary if it has a resource fork) */
+	ferr = upload_open(local_spec, &src);
 	if (ferr != noErr)
 	{
 		printf_s(idx, "ftp: cannot open local file (err=%d)\r\n", (int)ferr);
 		return 0;
 	}
+	file_size = src.total;
+	copy_cstr_trunc(remote, sizeof remote, remote_path);
+	if (src.macbinary)
+	{
+		upload_bin_name(remote, sizeof remote);
+		printf_s(idx, "Sending as MacBinary (data %ld, resource %ld bytes)\r\n", src.dlen, src.rlen);
+	}
 
-	printf_s(idx, "Uploading %ld bytes to %s\r\n", file_size, remote_path);
+	printf_s(idx, "Uploading %ld bytes to %s\r\n", file_size, remote);
 
 	/* open data connection */
 	data_ep = ftp_open_data(idx, ctrl_ep, s->ftp_host);
 	if (data_ep == kOTInvalidEndpointRef)
 	{
-		FSClose(in_ref);
+		upload_close(&src);
 		return 0;
 	}
 
 	/* send STOR */
-	snprintf(cmd, sizeof(cmd), "STOR %s", remote_path);
+	snprintf(cmd, sizeof(cmd), "STOR %s", remote);
 	s->endpoint = ctrl_ep;
 	code = ftp_command(idx, ctrl_ep, cmd, resp, sizeof(resp));
 	if (code != 150 && code != 125)
 	{
 		printf_s(idx, "ftp: STOR failed (%d)\r\n", code);
 		ftp_tcp_close(data_ep);
-		FSClose(in_ref);
+		upload_close(&src);
 		return 0;
 	}
 	data_ep = ftp_accept_data(idx, data_ep);
-	if (data_ep == kOTInvalidEndpointRef) { FSClose(in_ref); return 0; }
+	if (data_ep == kOTInvalidEndpointRef) { upload_close(&src); return 0; }
 
 	/* send file data */
 	s->endpoint = data_ep;
@@ -7732,10 +7877,8 @@ static int ftp_upload(int idx, EndpointRef ctrl_ep,
 		}
 
 		if (to_read > (long)sizeof(buf)) to_read = (long)sizeof(buf);
-		count = to_read;
-		ferr = FSRead(in_ref, &count, buf);
-		if (ferr != noErr && ferr != eofErr) break;
-		if (count == 0) break;
+		count = upload_read(&src, buf, to_read);
+		if (count <= 0) break;
 
 		/* send to data channel */
 		{
@@ -7780,7 +7923,7 @@ upload_done:
 	s->endpoint = ctrl_ep;
 
 	/* close local file */
-	FSClose(in_ref);
+	upload_close(&src);
 
 	/* read transfer-complete response (226) */
 	if (upload_ok)
@@ -9782,7 +9925,8 @@ static int scp_upload(int idx)
 	struct ssh_auth_params auth;
 	char hostname_buf[280];
 	long io_buf_size = 32768L; /* larger SCP I/O chunks for better throughput */
-	short in_ref = 0;
+	struct upload_src src;
+	long upload_total;
 	long total_written = 0;
 	long remaining = 0;
 	long next_progress_bytes = 0;
@@ -9791,13 +9935,20 @@ static int scp_upload(int idx)
 	int progress_live = 0;
 	int upload_ok = 1;
 
-	/* open local file from pre-resolved FSSpec */
+	/* open local file from pre-resolved FSSpec (MacBinary if it has a resource fork) */
 	{
-		OSErr ferr = FSpOpenDF(&s->scp_local_spec, fsRdPerm, &in_ref);
+		OSErr ferr = upload_open(&s->scp_local_spec, &src);
 		if (ferr != noErr)
 		{
 			printf_s(idx, "scp: failed to open local file (err=%d)\r\n", (int)ferr);
 			return 0;
+		}
+		upload_total = src.total;
+		if (src.macbinary)
+		{
+			upload_bin_name(s->scp_remote_path, sizeof(s->scp_remote_path));
+			printf_s(idx, "scp: sending as MacBinary (data %ld, resource %ld bytes)\r\n",
+			         src.dlen, src.rlen);
 		}
 	}
 
@@ -9815,7 +9966,7 @@ static int scp_upload(int idx)
 	/* initialize Open Transport (idempotent, required before any OT calls) */
 	if (InitOpenTransport() != noErr)
 	{
-		FSClose(in_ref);
+		upload_close(&src);
 		printf_s(idx, "scp: failed to initialize Open Transport\r\n");
 		return 0;
 	}
@@ -9827,7 +9978,7 @@ static int scp_upload(int idx)
 	{
 		if (s->recv_buffer) { OTFreeMem(s->recv_buffer); s->recv_buffer = NULL; }
 		if (s->send_buffer) { OTFreeMem(s->send_buffer); s->send_buffer = NULL; }
-		FSClose(in_ref);
+		upload_close(&src);
 		printf_s(idx, "scp: failed to allocate buffers\r\n");
 		return 0;
 	}
@@ -9837,7 +9988,7 @@ static int scp_upload(int idx)
 	{
 		OTFreeMem(s->recv_buffer); s->recv_buffer = NULL;
 		OTFreeMem(s->send_buffer); s->send_buffer = NULL;
-		FSClose(in_ref);
+		upload_close(&src);
 		return 0;
 	}
 
@@ -9852,7 +10003,7 @@ static int scp_upload(int idx)
 	while (1)
 	{
 		s->channel = libssh2_scp_send_ex(s->ssh_session, s->scp_remote_path,
-		                                  0644, s->scp_local_file_size, 0, 0);
+		                                  0644, upload_total, 0, 0);
 		if (s->channel != NULL) break;
 		if (libssh2_session_last_errno(s->ssh_session) == LIBSSH2_ERROR_EAGAIN)
 		{
@@ -9870,12 +10021,12 @@ static int scp_upload(int idx)
 		end_connection(idx);
 		OTFreeMem(s->recv_buffer); s->recv_buffer = NULL;
 		OTFreeMem(s->send_buffer); s->send_buffer = NULL;
-		FSClose(in_ref);
+		upload_close(&src);
 		return 0;
 	}
 
 	/* write loop */
-	remaining = s->scp_local_file_size;
+	remaining = upload_total;
 	while (remaining > 0 && s->thread_command != EXIT)
 	{
 		long to_read = io_buf_size;
@@ -9885,11 +10036,11 @@ static int scp_upload(int idx)
 		OSErr ferr;
 
 		if (to_read > remaining) to_read = remaining;
-		rcount = to_read;
-		ferr = FSRead(in_ref, &rcount, s->send_buffer);
-		if (ferr != noErr && ferr != eofErr)
+		rcount = upload_read(&src, s->send_buffer, to_read);
+		ferr = rcount < 0 ? ioErr : noErr;
+		if (ferr != noErr)
 		{
-			printf_s(idx, "\r\nscp: local read error (err=%d)\r\n", (int)ferr);
+			printf_s(idx, "\r\nscp: local read error\r\n");
 			upload_ok = 0;
 			break;
 		}
@@ -9928,7 +10079,7 @@ static int scp_upload(int idx)
 			}
 		}
 
-		if (transfer_progress_step(idx, total_written, s->scp_local_file_size,
+		if (transfer_progress_step(idx, total_written, upload_total,
 		                           &next_progress_bytes, &progress_live,
 		                           !s->scp_no_progress, 1))
 		{
@@ -9945,7 +10096,7 @@ upload_done:
 			if (eof_rc == LIBSSH2_ERROR_EAGAIN) YieldToAnyThread();
 		} while (eof_rc == LIBSSH2_ERROR_EAGAIN);
 	}
-	FSClose(in_ref);
+	upload_close(&src);
 
 	if (progress_live)
 		vt_write(idx, "\r\n");
