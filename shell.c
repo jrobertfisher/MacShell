@@ -5512,6 +5512,79 @@ static const char* http_header_find(const char* headers, const char* name)
 }
 
 /* extract filename from URL path or Content-Disposition header */
+/* Write downloaded data to the file, or to the terminal for curl / -O -.
+   On the terminal, stop at the first sign of binary data (NUL bytes). */
+static void wget_emit(int idx, short out_ref, long* count, const void* data)
+{
+	struct session* s = &sessions[idx];
+	const unsigned char* p = (const unsigned char*)data;
+	long i;
+
+	if (!s->wget_stdout)
+	{
+		FSWrite(out_ref, count, data);
+		return;
+	}
+	if (s->wget_binary_stop)
+		return;
+	for (i = 0; i < *count; i++)
+		if (p[i] == 0)
+		{
+			s->wget_binary_stop = 1;
+			return;
+		}
+	for (i = 0; i < *count; i++)
+	{
+		if (p[i] == '\n') vt_write(idx, "\r\n");
+		else if (p[i] != '\r') vt_char(idx, p[i]);
+	}
+}
+
+/* Make a server- or URL-supplied name safe for HFS. ':' is the Mac path
+   separator, so a name like "::System Folder:Finder" from a malicious server
+   could otherwise write outside the current folder. */
+static void wget_safe_name(char* name)
+{
+	char* p;
+	for (p = name; *p; p++)
+		if (*p == ':' || *p == '/' || *p == '\\' || (unsigned char)*p < 32)
+			*p = '-';
+	while (name[0] == '.' || name[0] == ' ')              /* no hidden/odd leading names */
+		memmove(name, name + 1, strlen(name));
+	if (name[0] == '\0')
+		strcpy(name, "index.html");
+}
+
+/* If name exists in the folder, change it to name.1, name.2 ... (max 31 chars). */
+static void wget_unique_name(short vRefNum, long dirID, char* name)
+{
+	char base[32], cand[32];
+	Str255 pn;
+	FSSpec tmp;
+	int n;
+
+	copy_cstr_trunc(base, sizeof base, name);
+	copy_cstr_trunc(cand, sizeof cand, name);
+	for (n = 1; n < 1000; n++)
+	{
+		int len = strlen(cand);
+		pn[0] = len;
+		memcpy(pn + 1, cand, len);
+		if (FSMakeFSSpec(vRefNum, dirID, pn, &tmp) == fnfErr)
+			break;
+		{
+			char suffix[8];
+			int blen;
+			snprintf(suffix, sizeof suffix, ".%d", n);
+			blen = 31 - (int)strlen(suffix);
+			if ((int)strlen(base) < blen) blen = strlen(base);
+			memcpy(cand, base, blen);
+			strcpy(cand + blen, suffix);
+		}
+	}
+	strcpy(name, cand);
+}
+
 static void extract_filename(const char* url_path, const char* headers,
                              char* out, int maxlen)
 {
@@ -5528,6 +5601,11 @@ static void extract_filename(const char* url_path, const char* headers,
 		{
 			fn = strchr(fn, '=') + 1;
 			if (*fn == '"') fn++;
+			{
+				/* RFC 5987 form: filename*=UTF-8''name */
+				const char* q = strstr(fn, "''");
+				if (q && q - fn < 16) fn = q + 2;
+			}
 			{
 				int i = 0;
 				while (*fn && *fn != '"' && *fn != '\r' && *fn != '\n' && i < maxlen - 1)
@@ -5555,7 +5633,7 @@ static void extract_filename(const char* url_path, const char* headers,
 	}
 
 	if (out[0] == '\0')
-		strncpy(out, "download", maxlen - 1);
+		strncpy(out, "index.html", maxlen - 1);       /* like wget: a URL ending in / */
 }
 
 /* ---- TLS support for HTTPS ---- */
@@ -5802,8 +5880,9 @@ retry_redirect:
 	sndCall.addr.buf = (UInt8*) &hostDNSAddress;
 	sndCall.addr.len = OTInitDNSAddress(&hostDNSAddress, hostport);
 
-	printf_s(idx, "Connecting to %s%s... ",
-	         use_tls ? "(TLS) " : "", hostport);
+	if (!s->wget_is_curl)
+		printf_s(idx, "Connecting to %s%s... ",
+		         use_tls ? "(TLS) " : "", hostport);
 
 	ot_timeout_provider = ep;
 	ot_timeout_deadline = TickCount() + OT_TIMEOUT_TICKS;
@@ -5825,7 +5904,7 @@ retry_redirect:
 		return;
 	}
 
-	vt_write(idx, "connected.\r\n");
+	if (!s->wget_is_curl) vt_write(idx, "connected.\r\n");
 
 	/* switch to non-blocking for handshake and recv */
 	OTSetNonBlocking(ep);
@@ -5840,7 +5919,7 @@ retry_redirect:
 		vt_write(idx, "wget: WARNING: https certificate NOT verified (no certificate store on\r\n"
 		              "      classic Mac OS). The connection is encrypted, but the site\r\n"
 		              "      could be impersonated.\r\n");
-		vt_write(idx, "TLS handshake... ");
+		if (!s->wget_is_curl) vt_write(idx, "TLS handshake... ");
 
 		mbedtls_ssl_init(&ssl);
 		mbedtls_ssl_config_init(&ssl_conf);
@@ -5927,18 +6006,18 @@ retry_redirect:
 			return;
 		}
 
-		vt_write(idx, "ok.\r\n");
+		if (!s->wget_is_curl) vt_write(idx, "ok.\r\n");
 		tls_initialized = 1;
 	}
 
 	/* send HTTP request */
 	snprintf(request, sizeof(request),
-	         "GET %s HTTP/1.0\r\n"
+	         "%s %s HTTP/1.0\r\n"
 	         "Host: %s\r\n"
-	         "User-Agent: SevenTTY/1.1\r\n"
+	         "User-Agent: MacShell/%s\r\n"
 	         "Connection: close\r\n"
 	         "\r\n",
-	         path, host);
+	         s->wget_head ? "HEAD" : "GET", path, host, s->wget_is_curl ? "curl" : "wget");
 	req_len = strlen(request);
 
 	{
@@ -5991,7 +6070,7 @@ retry_redirect:
 		}
 	}
 
-	printf_s(idx, "GET %s\r\n", path);
+	if (!s->wget_is_curl) printf_s(idx, "%s %s\r\n", s->wget_head ? "HEAD" : "GET", path);
 
 	/* already non-blocking from after connect */
 	resp_len = 0;
@@ -6015,6 +6094,8 @@ retry_redirect:
 				vt_write(idx, "\r\nwget: cancelled\r\n");
 				break;
 			}
+			if (s->wget_binary_stop)
+				break;
 
 			if (now > recv_deadline)
 			{
@@ -6096,6 +6177,33 @@ retry_redirect:
 							headers_str[hcopy] = '\0';
 						}
 
+						/* curl -I: show the headers and stop */
+						if (s->wget_head)
+						{
+							const char* h;
+							for (h = headers_str; *h; h++)
+							{
+								if (*h == '\n') vt_write(idx, "\r\n");
+								else if (*h != '\r') vt_char(idx, *h);
+							}
+							download_ok = 1;
+							break;
+						}
+
+						/* plain curl doesn't follow redirects (like the real one) */
+						if (status_code >= 300 && status_code < 400 && !s->wget_follow)
+						{
+							const char* loc = http_header_find(headers_str, "location");
+							printf_s(idx, "curl: HTTP %d redirect", status_code);
+							if (loc)
+							{
+								vt_write(idx, " to ");
+								while (*loc && *loc != '\r' && *loc != '\n') vt_char(idx, *loc++);
+							}
+							vt_write(idx, "; use -L to follow it\r\n");
+							break;
+						}
+
 						/* handle redirects */
 						if (status_code >= 300 && status_code < 400)
 						{
@@ -6174,7 +6282,9 @@ retry_redirect:
 						if (status_code != 200)
 						{
 							printf_s(idx, "HTTP %d\r\n", status_code);
-							break;
+							/* curl shows the server's error page; wget stops */
+							if (!(s->wget_is_curl && s->wget_stdout))
+								break;
 						}
 
 						/* get content-length */
@@ -6183,8 +6293,20 @@ retry_redirect:
 							if (cl) content_length = atol(cl);
 						}
 
-						/* figure out filename */
-						extract_filename(path, headers_str, filename, sizeof(filename));
+						/* output to the terminal: no file */
+						if (s->wget_stdout)
+						{
+							header_done = 1;
+							s->wget_binary_stop = 0;
+							goto wget_emit_initial;
+						}
+
+						/* figure out filename: -o/-O name, else from the URL or server */
+						if (s->wget_outname[0])
+							copy_cstr_trunc(filename, sizeof(filename), s->wget_outname);
+						else
+							extract_filename(path, headers_str, filename, sizeof(filename));
+						wget_safe_name(filename);
 
 						/* truncate to 31 chars for HFS */
 						{
@@ -6193,6 +6315,11 @@ retry_redirect:
 							memcpy(local_name, filename, nlen);
 							local_name[nlen] = '\0';
 						}
+
+						/* like wget: never overwrite an existing file, add .1, .2, ...
+						   (an explicit -o/-O name is overwritten, like curl -o and wget -O) */
+						if (!s->wget_outname[0])
+							wget_unique_name(s->shell_vRefNum, s->shell_dirID, local_name);
 
 						printf_s(idx, "Saving to: %s", local_name);
 						if (content_length >= 0)
@@ -6206,7 +6333,7 @@ retry_redirect:
 							memcpy(pname + 1, local_name, nlen);
 						}
 
-						/* delete if exists */
+						/* replace only when the user named the file */
 						{
 							FSSpec tmp;
 							if (FSMakeFSSpec(s->shell_vRefNum, s->shell_dirID, pname, &tmp) == noErr)
@@ -6224,6 +6351,7 @@ retry_redirect:
 						}
 
 						header_done = 1;
+wget_emit_initial:
 
 						/* write any body data already received */
 						if (body_bytes > 0)
@@ -6240,7 +6368,7 @@ retry_redirect:
 								first_bytes_len += grab;
 							}
 
-							FSWrite(out_ref, &wcount, body_data);
+							wget_emit(idx, out_ref, &wcount, body_data);
 							total_written += wcount;
 							bytes_since_yield += wcount;
 							if (transfer_progress_step(idx, total_written, content_length,
@@ -6267,7 +6395,7 @@ retry_redirect:
 								first_bytes_len += grab;
 							}
 
-							FSWrite(out_ref, &wcount, ovf_data);
+							wget_emit(idx, out_ref, &wcount, ovf_data);
 							total_written += wcount;
 							bytes_since_yield += wcount;
 							if (transfer_progress_step(idx, total_written, content_length,
@@ -6296,7 +6424,7 @@ retry_redirect:
 					first_bytes_len += grab;
 				}
 
-				FSWrite(out_ref, &wcount, buf);
+				wget_emit(idx, out_ref, &wcount, buf);
 				total_written += wcount;
 				bytes_since_yield += wcount;
 
@@ -6398,7 +6526,13 @@ retry_redirect:
 			printf_s(idx, "Average speed: %ld KB/s\r\n", kbps);
 		}
 	}
-	else if (status_code == 200)
+	else if (s->wget_stdout)
+	{
+		vt_write(idx, "\r\n");
+		if (s->wget_binary_stop)
+			vt_write(idx, "curl: binary output can mess up the terminal; save it with -o <file> or -O\r\n");
+	}
+	else if (status_code == 200 && !s->wget_head)
 	{
 		vt_write(idx, "wget: no data received\r\n");
 	}
@@ -6407,6 +6541,7 @@ retry_redirect:
 
 /* ------------------------------------------------------------------ */
 /* FTP client support                                                 */
+#define FTP_ANON_PASSWORD "macshell@"
 /* ------------------------------------------------------------------ */
 
 /* TCP connect helper: create, bind, connect an OT TCP endpoint.
@@ -6728,6 +6863,8 @@ static int ftp_login(int idx, EndpointRef ctrl_ep,
 /* open a PASV data connection. sends PASV, parses response, connects.
    uses control_host for the data connection (NAT-safe).
    returns data endpoint or kOTInvalidEndpointRef. */
+static EndpointRef ftp_open_listen(int idx, EndpointRef ctrl_ep);
+
 static EndpointRef ftp_open_data(int idx, EndpointRef ctrl_ep,
                                  const char* control_host)
 {
@@ -6735,6 +6872,9 @@ static EndpointRef ftp_open_data(int idx, EndpointRef ctrl_ep,
 	char pasv_ip[64];
 	unsigned short data_port;
 	int code;
+
+	if (sessions[idx].ftp_active)
+		return ftp_open_listen(idx, ctrl_ep);
 
 	code = ftp_command(idx, ctrl_ep, "PASV", resp, sizeof(resp));
 	if (code != 227)
@@ -6757,6 +6897,119 @@ static EndpointRef ftp_open_data(int idx, EndpointRef ctrl_ep,
 	}
 
 	return ftp_tcp_connect(idx, control_host, data_port);
+}
+
+/* Active mode, step 1: listen on a free local port and tell the server
+   where to connect ("PORT h1,h2,h3,h4,p1,p2"). Returns the listening
+   endpoint, which ftp_accept_data() turns into the data connection once
+   the server has accepted RETR/STOR/LIST. */
+static EndpointRef ftp_open_listen(int idx, EndpointRef ctrl_ep)
+{
+	EndpointRef ep;
+	OSStatus err;
+	TBind req, ret;
+	InetAddress want, got;
+	InetInterfaceInfo info;
+	char cmd[64], resp[512];
+	int code;
+
+	if (OTInetGetInterfaceInfo(&info, kDefaultInetInterface) != noErr)
+	{
+		vt_write(idx, "ftp: active mode: can't find this Mac's IP address\r\n");
+		return kOTInvalidEndpointRef;
+	}
+
+	ep = OTOpenEndpoint(OTCreateConfiguration(kTCPName), 0, nil, &err);
+	if (err != noErr)
+	{
+		printf_s(idx, "ftp: failed to open endpoint (err=%d)\r\n", (int)err);
+		return kOTInvalidEndpointRef;
+	}
+	OTSetSynchronous(ep);
+	OTSetBlocking(ep);
+	OTInstallNotifier(ep, shell_ot_timeout_notifier, nil);
+	OTUseSyncIdleEvents(ep, true);
+
+	OTInitInetAddress(&want, 0, kOTAnyInetAddress);     /* any free port */
+	OTMemzero(&req, sizeof req);
+	OTMemzero(&ret, sizeof ret);
+	req.addr.buf = (UInt8*)&want;
+	req.addr.len = sizeof want;
+	req.qlen = 1;                                        /* we will listen */
+	ret.addr.buf = (UInt8*)&got;
+	ret.addr.maxlen = sizeof got;
+	err = OTBind(ep, &req, &ret);
+	if (err != noErr)
+	{
+		printf_s(idx, "ftp: active mode: bind failed (err=%d)\r\n", (int)err);
+		OTCloseProvider(ep);
+		return kOTInvalidEndpointRef;
+	}
+
+	snprintf(cmd, sizeof cmd, "PORT %lu,%lu,%lu,%lu,%u,%u",
+	         (unsigned long)((info.fAddress >> 24) & 255), (unsigned long)((info.fAddress >> 16) & 255),
+	         (unsigned long)((info.fAddress >> 8) & 255), (unsigned long)(info.fAddress & 255),
+	         (unsigned)((got.fPort >> 8) & 255), (unsigned)(got.fPort & 255));
+	code = ftp_command(idx, ctrl_ep, cmd, resp, sizeof resp);
+	if (code != 200)
+	{
+		printf_s(idx, "ftp: PORT failed (%d); try passive mode (-p)\r\n", code);
+		OTUnbind(ep);
+		OTCloseProvider(ep);
+		return kOTInvalidEndpointRef;
+	}
+	return ep;
+}
+
+/* Active mode, step 2 (after the server answered 150/125): wait for the
+   server's data connection and accept it. Passive mode: nothing to do. */
+static EndpointRef ftp_accept_data(int idx, EndpointRef ep)
+{
+	EndpointRef data_ep;
+	OSStatus err;
+	TCall call;
+	InetAddress peer;
+
+	if (!sessions[idx].ftp_active || ep == kOTInvalidEndpointRef)
+		return ep;
+
+	OTMemzero(&call, sizeof call);
+	call.addr.buf = (UInt8*)&peer;
+	call.addr.maxlen = sizeof peer;
+
+	ot_timeout_provider = ep;
+	ot_timeout_deadline = TickCount() + 1800;          /* 30 seconds */
+	err = OTListen(ep, &call);
+	ot_timeout_deadline = 0;
+	ot_timeout_provider = nil;
+	if (err != noErr)
+	{
+		vt_write(idx, err == kOTCanceledErr
+		         ? "ftp: active mode: the server didn't connect back (firewall?); try passive mode (-p)\r\n"
+		         : "ftp: active mode: listen failed\r\n");
+		OTUnbind(ep);
+		OTCloseProvider(ep);
+		return kOTInvalidEndpointRef;
+	}
+
+	data_ep = OTOpenEndpoint(OTCreateConfiguration(kTCPName), 0, nil, &err);
+	if (err == noErr)
+	{
+		OTSetSynchronous(data_ep);
+		OTSetBlocking(data_ep);
+		err = OTAccept(ep, data_ep, &call);
+	}
+	OTUnbind(ep);
+	OTCloseProvider(ep);
+	if (err != noErr)
+	{
+		printf_s(idx, "ftp: active mode: accept failed (err=%d)\r\n", (int)err);
+		if (data_ep != kOTInvalidEndpointRef) OTCloseProvider(data_ep);
+		return kOTInvalidEndpointRef;
+	}
+
+	OTSetNonBlocking(data_ep);                          /* like the passive path */
+	return data_ep;
 }
 
 /* parse ftp://[user[:pass]@]host[:port]/path
@@ -6977,6 +7230,8 @@ static int ftp_download(int idx, EndpointRef ctrl_ep,
 		ftp_tcp_close(data_ep);
 		return 0;
 	}
+	data_ep = ftp_accept_data(idx, data_ep);
+	if (data_ep == kOTInvalidEndpointRef) return 0;
 
 	/* create output file */
 	{
@@ -7209,6 +7464,8 @@ static int ftp_upload(int idx, EndpointRef ctrl_ep,
 		FSClose(in_ref);
 		return 0;
 	}
+	data_ep = ftp_accept_data(idx, data_ep);
+	if (data_ep == kOTInvalidEndpointRef) { FSClose(in_ref); return 0; }
 
 	/* send file data */
 	s->endpoint = data_ep;
@@ -7328,6 +7585,8 @@ static int ftp_list(int idx, EndpointRef ctrl_ep, const char* remote_path)
 		ftp_tcp_close(data_ep);
 		return 0;
 	}
+	data_ep = ftp_accept_data(idx, data_ep);
+	if (data_ep == kOTInvalidEndpointRef) return 0;
 
 	/* receive listing data */
 	s->endpoint = data_ep;
@@ -7401,7 +7660,7 @@ static void ftp_wget_download(int idx, const char* url, int no_progress)
 
 	/* credential defaults */
 	if (strcmp(user, "anonymous") == 0 && pass[0] == '\0')
-		strcpy(pass, "seventty@local");
+		strcpy(pass, FTP_ANON_PASSWORD);
 
 	if (pass[0] != '\0' && strcmp(user, "anonymous") != 0)
 	{
@@ -7547,7 +7806,7 @@ static void* ftp_worker_thread(void* arg)
 	if (s->ftp_user[0] == '\0')
 		strcpy(s->ftp_user, "anonymous");
 	if (strcmp(s->ftp_user, "anonymous") == 0 && pass[0] == '\0')
-		strcpy(pass, "seventty@local");
+		strcpy(pass, FTP_ANON_PASSWORD);
 
 	/* connect */
 	printf_s(idx, "Connecting to %s:%d... ", s->ftp_host, (int)s->ftp_port);
@@ -7680,6 +7939,379 @@ ftp_worker_done:
 }
 
 /* ------------------------------------------------------------------ */
+/* interactive ftp session: ftp [-A|-p] [user[:pass]@]host[:port]     */
+/* ------------------------------------------------------------------ */
+
+
+static int ftp_is_anonymous(const char* user)
+{
+	return strcmp(user, "anonymous") == 0 || strcmp(user, "ftp") == 0;
+}
+
+/* close the interactive session's control connection */
+static void ftp_session_close(int idx)
+{
+	struct session* s = &sessions[idx];
+	if (s->ftp_ctrl_ep != kOTInvalidEndpointRef)
+		ftp_tcp_close(s->ftp_ctrl_ep);
+	s->ftp_ctrl_ep = kOTInvalidEndpointRef;
+	s->endpoint = kOTInvalidEndpointRef;
+	s->ftp_mode = FTP_MODE_OFF;
+	memset(s->ftp_password, 0, sizeof(s->ftp_password));
+}
+
+/* print a server reply, converting line endings */
+static void ftp_print_reply(int idx, const char* resp)
+{
+	const char* p;
+	for (p = resp; *p; p++)
+	{
+		if (*p == '\n') vt_write(idx, "\r\n");
+		else if (*p != '\r') vt_char(idx, *p);
+	}
+	if (p > resp && p[-1] != '\n') vt_write(idx, "\r\n");
+}
+
+/* send one command and print the reply; returns the reply code (<0 = connection lost) */
+static int ftp_simple(int idx, const char* cmd)
+{
+	struct session* s = &sessions[idx];
+	char resp[1024];
+	int code = ftp_command(idx, s->ftp_ctrl_ep, cmd, resp, sizeof(resp));
+	if (code > 0) ftp_print_reply(idx, resp);
+	return code;
+}
+
+static void* ftp_session_thread(void* arg)
+{
+	int idx = (int)(long)arg;
+	struct session* s = &sessions[idx];
+	char resp[1024];
+	char line[256];
+	char* argv[MAX_ARGS];
+	int argc, code = 1;
+
+	if (s->ftp_ctrl_ep == kOTInvalidEndpointRef)
+	{
+		/* --- connect and log in --- */
+		EndpointRef ep;
+		const char* pass = s->ftp_password;
+
+		if (ftp_is_anonymous(s->ftp_user) && pass[0] == '\0')
+			pass = FTP_ANON_PASSWORD;           /* anonymous: no password needed */
+
+		printf_s(idx, "Connecting to %s:%d... ", s->ftp_host, (int)s->ftp_port);
+		ep = ftp_tcp_connect(idx, s->ftp_host, s->ftp_port);
+		if (ep == kOTInvalidEndpointRef)
+		{
+			ftp_session_close(idx);
+			goto done;
+		}
+		vt_write(idx, "connected.\r\n");
+		s->ftp_ctrl_ep = ep;
+		s->endpoint = ep;
+
+		code = ftp_command(idx, ep, NULL, resp, sizeof(resp));
+		if (code > 0) ftp_print_reply(idx, resp);
+		if (code != 220)
+		{
+			vt_write(idx, "ftp: unexpected greeting\r\n");
+			ftp_session_close(idx);
+			goto done;
+		}
+		if (!ftp_login(idx, ep, s->ftp_user, pass))
+		{
+			vt_write(idx, "ftp: login failed\r\n");
+			ftp_session_close(idx);
+			goto done;
+		}
+		memset(s->ftp_password, 0, sizeof(s->ftp_password));
+		printf_s(idx, "Logged in as %s. %s mode. Type 'help' for commands.\r\n",
+		         s->ftp_user, s->ftp_active ? "Active" : "Passive");
+		s->ftp_mode = FTP_MODE_READY;
+		goto done;
+	}
+
+	/* --- one command on the open connection --- */
+	copy_cstr_trunc(line, sizeof(line), s->ftp_cmdline);
+	argc = parse_args(line, argv, MAX_ARGS);
+	if (argc == 0) goto done;
+	s->endpoint = s->ftp_ctrl_ep;
+
+	if (!strcmp(argv[0], "ls") || !strcmp(argv[0], "dir"))
+	{
+		if (!ftp_list(idx, s->ftp_ctrl_ep, argc > 1 ? argv[1] : "")) code = 0;
+	}
+	else if (!strcmp(argv[0], "cd") || !strcmp(argv[0], "cwd"))
+	{
+		char cmd[300];
+		if (argc < 2) { vt_write(idx, "usage: cd <directory>\r\n"); goto done; }
+		snprintf(cmd, sizeof cmd, "CWD %s", argv[1]);
+		code = ftp_simple(idx, cmd);
+	}
+	else if (!strcmp(argv[0], "cdup") || !strcmp(argv[0], "cd.."))
+		code = ftp_simple(idx, "CDUP");
+	else if (!strcmp(argv[0], "pwd"))
+		code = ftp_simple(idx, "PWD");
+	else if (!strcmp(argv[0], "get") || !strcmp(argv[0], "recv"))
+	{
+		if (argc < 2) { vt_write(idx, "usage: get <remote-file>\r\n"); goto done; }
+		if (!ftp_download(idx, s->ftp_ctrl_ep, argv[1], 0)) code = 0;
+	}
+	else if (!strcmp(argv[0], "put") || !strcmp(argv[0], "send"))
+	{
+		FSSpec fspec;
+		CInfoPBRec pb;
+		Str255 fname;
+		char remote[300];
+
+		if (argc < 2) { vt_write(idx, "usage: put <local-file> [remote-name]\r\n"); goto done; }
+		if (resolve_path_alias(idx, argv[1], &fspec) != noErr)
+		{
+			printf_s(idx, "put: %s: not found\r\n", argv[1]);
+			goto done;
+		}
+		memset(&pb, 0, sizeof pb);
+		memcpy(fname, fspec.name, fspec.name[0] + 1);
+		pb.hFileInfo.ioNamePtr = fname;
+		pb.hFileInfo.ioVRefNum = fspec.vRefNum;
+		pb.hFileInfo.ioDirID = fspec.parID;
+		if (PBGetCatInfoSync(&pb) != noErr || (pb.hFileInfo.ioFlAttrib & 0x10))
+		{
+			printf_s(idx, "put: %s: not a file\r\n", argv[1]);
+			goto done;
+		}
+		if (argc > 2) copy_cstr_trunc(remote, sizeof remote, argv[2]);
+		else ftp_basename(argv[1], remote, sizeof remote);
+		if (!ftp_upload(idx, s->ftp_ctrl_ep, remote, &fspec, pb.hFileInfo.ioFlLgLen, 0)) code = 0;
+	}
+	else if (!strcmp(argv[0], "mkdir") || !strcmp(argv[0], "rmdir") ||
+	         !strcmp(argv[0], "delete") || !strcmp(argv[0], "rm") || !strcmp(argv[0], "size"))
+	{
+		char cmd[300];
+		const char* verb = !strcmp(argv[0], "mkdir") ? "MKD" : !strcmp(argv[0], "rmdir") ? "RMD"
+		                 : !strcmp(argv[0], "size") ? "SIZE" : "DELE";
+		if (argc < 2) { printf_s(idx, "usage: %s <name>\r\n", argv[0]); goto done; }
+		snprintf(cmd, sizeof cmd, "%s %s", verb, argv[1]);
+		code = ftp_simple(idx, cmd);
+	}
+	else if (!strcmp(argv[0], "rename"))
+	{
+		char cmd[300];
+		if (argc < 3) { vt_write(idx, "usage: rename <from> <to>\r\n"); goto done; }
+		snprintf(cmd, sizeof cmd, "RNFR %s", argv[1]);
+		code = ftp_simple(idx, cmd);
+		if (code == 350)
+		{
+			snprintf(cmd, sizeof cmd, "RNTO %s", argv[2]);
+			code = ftp_simple(idx, cmd);
+		}
+	}
+	else if (!strcmp(argv[0], "bye") || !strcmp(argv[0], "quit") || !strcmp(argv[0], "exit") ||
+	         !strcmp(argv[0], "close") || !strcmp(argv[0], "disconnect"))
+	{
+		ftp_simple(idx, "QUIT");
+		ftp_session_close(idx);
+		goto done;
+	}
+
+	/* connection lost or command cancelled with Ctrl+C: end the session */
+	if (code < 0 || s->thread_command == EXIT)
+	{
+		vt_write(idx, s->thread_command == EXIT ? "ftp: cancelled; connection closed.\r\n"
+		                                        : "ftp: connection lost.\r\n");
+		ftp_session_close(idx);
+	}
+
+done:
+	s->endpoint = s->ftp_ctrl_ep;
+	s->worker_mode = WORKER_NONE;
+	s->thread_state = DONE;
+	s->thread_command = WAIT;
+	if (s->in_use && s->type == SESSION_LOCAL)
+		shell_prompt(idx);
+	return 0;
+}
+
+/* run the network part of the session in a worker thread */
+static void ftp_session_start(int idx, const char* cmdline)
+{
+	struct session* s = &sessions[idx];
+	ThreadID tid = kNoThreadID;
+	OSErr err;
+
+	if (s->thread_state == DONE && s->thread_id != kNoThreadID)
+		session_reap_thread(idx, 0);
+	if (s->thread_id != kNoThreadID && local_shell_worker_active(s))
+	{
+		vt_write(idx, "ftp: busy\r\n");
+		return;
+	}
+	copy_cstr_trunc(s->ftp_cmdline, sizeof(s->ftp_cmdline), cmdline ? cmdline : "");
+	if (s->ftp_ctrl_ep == kOTInvalidEndpointRef)
+		s->ftp_mode = FTP_MODE_CONNECTING;
+
+	s->thread_command = READ;
+	s->thread_state = OPEN;
+	err = NewThread(kCooperativeThread, ftp_session_thread, (void*)(long)idx,
+	                THREAD_STACK_WORKER, kCreateIfNeeded, NULL, &tid);
+	if (err != noErr)
+	{
+		s->thread_command = WAIT;
+		s->thread_state = DONE;
+		s->thread_id = kNoThreadID;
+		printf_s(idx, "ftp: failed to create worker thread (err=%d)\r\n", (int)err);
+		if (s->ftp_ctrl_ep == kOTInvalidEndpointRef) s->ftp_mode = FTP_MODE_OFF;
+		return;
+	}
+	s->thread_id = tid;
+	s->worker_mode = WORKER_FTP;
+}
+
+static void ftp_session_help(int idx)
+{
+	vt_write(idx,
+		"Remote:  ls [dir]  dir  cd <dir>  cdup  pwd  get <file>  put <file> [name]\r\n"
+		"         mkdir <dir>  rmdir <dir>  delete <file>  rename <from> <to>  size <file>\r\n"
+		"Local:   lcd <dir>  lpwd  lls\r\n"
+		"Session: passive  active  status  binary  help  bye\r\n");
+}
+
+/* a line typed while an ftp session is open (or while logging in) */
+static void ftp_interactive_line(int idx, char* line)
+{
+	struct session* s = &sessions[idx];
+	char copy[256];
+	char* argv[MAX_ARGS];
+	int argc;
+
+	if (s->ftp_mode == FTP_MODE_ASK_USER)
+	{
+		char* p = line;
+		while (*p == ' ') p++;
+		copy_cstr_trunc(s->ftp_user, sizeof(s->ftp_user), *p ? p : "anonymous");
+		if (ftp_is_anonymous(s->ftp_user))
+			ftp_session_start(idx, NULL);               /* no password for anonymous */
+		else
+		{
+			s->ftp_mode = FTP_MODE_ASK_PASS;
+			s->hide_input = 1;
+		}
+		return;
+	}
+	if (s->ftp_mode == FTP_MODE_ASK_PASS)
+	{
+		copy_cstr_trunc(s->ftp_password, sizeof(s->ftp_password), line);
+		memset(line, 0, strlen(line));
+		ftp_session_start(idx, NULL);
+		return;
+	}
+	if (s->ftp_mode != FTP_MODE_READY)
+		return;
+
+	copy_cstr_trunc(copy, sizeof copy, line);
+	argc = parse_args(copy, argv, MAX_ARGS);
+	if (argc == 0) return;
+
+	if (!strcmp(argv[0], "help") || !strcmp(argv[0], "?"))
+		ftp_session_help(idx);
+	else if (!strcmp(argv[0], "passive"))
+	{
+		s->ftp_active = 0;
+		vt_write(idx, "Passive mode: the Mac connects to the server for data.\r\n");
+	}
+	else if (!strcmp(argv[0], "active"))
+	{
+		s->ftp_active = 1;
+		vt_write(idx, "Active mode: the server connects back to the Mac for data.\r\n");
+	}
+	else if (!strcmp(argv[0], "status"))
+	{
+		printf_s(idx, "Connected to %s:%d as %s, %s mode, binary transfers.\r\n",
+		         s->ftp_host, (int)s->ftp_port, s->ftp_user, s->ftp_active ? "active" : "passive");
+	}
+	else if (!strcmp(argv[0], "binary") || !strcmp(argv[0], "bin") || !strcmp(argv[0], "image"))
+		vt_write(idx, "Transfers are always binary (TYPE I).\r\n");
+	else if (!strcmp(argv[0], "lcd"))
+	{
+		argv[0] = "cd";
+		cmd_cd(idx, argc, argv);
+	}
+	else if (!strcmp(argv[0], "lpwd"))
+		cmd_pwd(idx, argc, argv);
+	else if (!strcmp(argv[0], "lls"))
+	{
+		argv[0] = "ls";
+		cmd_ls(idx, argc, argv);
+	}
+	else if (!strcmp(argv[0], "ls") || !strcmp(argv[0], "dir") || !strcmp(argv[0], "cd") ||
+	         !strcmp(argv[0], "cwd") || !strcmp(argv[0], "cdup") || !strcmp(argv[0], "cd..") ||
+	         !strcmp(argv[0], "pwd") || !strcmp(argv[0], "get") || !strcmp(argv[0], "recv") ||
+	         !strcmp(argv[0], "put") || !strcmp(argv[0], "send") || !strcmp(argv[0], "mkdir") ||
+	         !strcmp(argv[0], "rmdir") || !strcmp(argv[0], "delete") || !strcmp(argv[0], "rm") ||
+	         !strcmp(argv[0], "rename") || !strcmp(argv[0], "size") || !strcmp(argv[0], "bye") ||
+	         !strcmp(argv[0], "quit") || !strcmp(argv[0], "exit") || !strcmp(argv[0], "close") ||
+	         !strcmp(argv[0], "disconnect"))
+		ftp_session_start(idx, line);
+	else
+		printf_s(idx, "?Unknown command '%s'. Type 'help'.\r\n", argv[0]);
+}
+
+/* ftp [-A|-p] [user[:password]@]host[:port] */
+static void ftp_interactive_open(int idx, const char* spec, int active)
+{
+	struct session* s = &sessions[idx];
+	char buf[300];
+	char* host = buf;
+	char* at;
+	char* colon;
+
+	if (s->ftp_mode != FTP_MODE_OFF)
+	{
+		vt_write(idx, "ftp: a session is already open\r\n");
+		return;
+	}
+	copy_cstr_trunc(buf, sizeof buf, spec);
+	s->ftp_user[0] = '\0';
+	memset(s->ftp_password, 0, sizeof(s->ftp_password));
+	s->ftp_port = 21;
+	s->ftp_active = active;
+
+	at = strrchr(buf, '@');
+	if (at)
+	{
+		*at = '\0';
+		host = at + 1;
+		colon = strchr(buf, ':');
+		if (colon)
+		{
+			*colon = '\0';
+			copy_cstr_trunc(s->ftp_password, sizeof(s->ftp_password), colon + 1);
+		}
+		copy_cstr_trunc(s->ftp_user, sizeof(s->ftp_user), buf);
+	}
+	colon = strchr(host, ':');
+	if (colon)
+	{
+		*colon = '\0';
+		s->ftp_port = (unsigned short)atoi(colon + 1);
+		if (s->ftp_port == 0) s->ftp_port = 21;
+	}
+	copy_cstr_trunc(s->ftp_host, sizeof(s->ftp_host), host);
+	memset(buf, 0, sizeof buf);
+
+	if (s->ftp_user[0] == '\0')
+		s->ftp_mode = FTP_MODE_ASK_USER;                /* "Name (host:anonymous):" */
+	else if (ftp_is_anonymous(s->ftp_user) || s->ftp_password[0])
+		ftp_session_start(idx, NULL);
+	else
+	{
+		s->ftp_mode = FTP_MODE_ASK_PASS;
+		s->hide_input = 1;
+	}
+}
+
+/* ------------------------------------------------------------------ */
 /* ftp command entry point                                            */
 /* ------------------------------------------------------------------ */
 
@@ -7692,9 +8324,28 @@ static void cmd_ftp(int idx, int argc, char** argv)
 	int argi = 1;
 	const char* subcmd;
 
+	/* interactive session: ftp [-A|-p] [user[:pass]@]host[:port] */
+	{
+		int i = 1, active = 0;
+		while (i < argc && (!strcmp(argv[i], "-A") || !strcmp(argv[i], "--active") ||
+		                    !strcmp(argv[i], "-p") || !strcmp(argv[i], "--passive")))
+		{
+			active = (argv[i][1] == 'A' || !strcmp(argv[i], "--active"));
+			i++;
+		}
+		if (i == argc - 1 && strcmp(argv[i], "get") && strcmp(argv[i], "put") && strcmp(argv[i], "ls"))
+		{
+			ftp_interactive_open(idx, argv[i], active);
+			return;
+		}
+	}
+
 	if (argc < 2)
 	{
-		vt_write(idx, "usage: ftp get|put|ls [-n] <args>\r\n");
+		vt_write(idx, "usage: ftp [-A|-p] [user@]host[:port]      (interactive session)\r\n");
+		vt_write(idx, "       ftp get|put|ls [-n] [-A|-p] <args>   (one-shot transfer)\r\n");
+		vt_write(idx, "  -p  passive mode (default)   -A  active mode   -n  no progress\r\n");
+		vt_write(idx, "  ftp 192.168.0.10\r\n");
 		vt_write(idx, "  ftp get user@host:/path/file.txt\r\n");
 		vt_write(idx, "  ftp put localfile user@host:/path/\r\n");
 		vt_write(idx, "  ftp put *.txt user@host:/dir/\r\n");
@@ -7704,11 +8355,18 @@ static void cmd_ftp(int idx, int argc, char** argv)
 
 	subcmd = argv[argi++];
 
-	/* parse optional -n */
-	if (argi < argc &&
-	    (strcmp(argv[argi], "-n") == 0 || strcmp(argv[argi], "--no-progress") == 0))
+	/* options: -n (no progress), -A (active mode), -p (passive mode, default) */
+	s->ftp_active = 0;
+	while (argi < argc && argv[argi][0] == '-')
 	{
-		no_progress = 1;
+		if (strcmp(argv[argi], "-n") == 0 || strcmp(argv[argi], "--no-progress") == 0)
+			no_progress = 1;
+		else if (strcmp(argv[argi], "-A") == 0 || strcmp(argv[argi], "--active") == 0)
+			s->ftp_active = 1;
+		else if (strcmp(argv[argi], "-p") == 0 || strcmp(argv[argi], "--passive") == 0)
+			s->ftp_active = 0;
+		else
+			break;
 		argi++;
 	}
 
@@ -7942,7 +8600,8 @@ static void cmd_ftp(int idx, int argc, char** argv)
 	else
 	{
 		printf_s(idx, "ftp: unknown subcommand '%s'\r\n", subcmd);
-		vt_write(idx, "usage: ftp get|put|ls [-n] <args>\r\n");
+		vt_write(idx, "usage: ftp get|put|ls [-n] [-A|-p] <args>\r\n");
+		vt_write(idx, "  -p  passive mode (default)   -A  active mode   -n  no progress\r\n");
 		return;
 	}
 
@@ -8023,31 +8682,65 @@ static void cmd_wget(int idx, int argc, char** argv)
 	OSErr err = noErr;
 	int argi = 1;
 	int no_progress = 0;
+	int is_curl = (strcmp(argv[0], "curl") == 0);
+	const char* url = NULL;
+	const char* usage = is_curl
+		? "usage: curl [-o file] [-O] [-I] [-L] <url>\r\n"
+		  "  (no option) show the page    -o file  save as file    -O  save with the URL's name\r\n"
+		  "  -I  headers only             -L  follow redirects\r\n"
+		: "usage: wget [-n] [-O file | -O -] <url>\r\n"
+		  "  saves to a file named from the URL (index.html for a site); never overwrites\r\n"
+		  "  -O file  save as file    -O -  show on screen    -n  no progress\r\n";
 
-	if (argc < 2)
+	/* defaults: wget saves to a file and follows redirects; curl prints */
+	s->wget_is_curl = is_curl;
+	s->wget_stdout = is_curl;
+	s->wget_head = 0;
+	s->wget_follow = !is_curl;
+	s->wget_binary_stop = 0;
+	s->wget_outname[0] = '\0';
+
+	for (argi = 1; argi < argc; argi++)
 	{
-		vt_write(idx, "usage: wget [-n] <url>\r\n");
+		const char* a = argv[argi];
+		if (a[0] != '-' || a[1] == '\0')
+		{
+			if (url) { vt_write(idx, is_curl ? "curl: too many arguments\r\n" : "wget: too many arguments\r\n"); vt_write(idx, usage); return; }
+			url = a;
+		}
+		else if (!strcmp(a, "-n") || !strcmp(a, "--no-progress"))
+			no_progress = 1;
+		else if (is_curl && !strcmp(a, "-I"))
+			s->wget_head = 1;
+		else if (is_curl && !strcmp(a, "-L"))
+			s->wget_follow = 1;
+		else if (is_curl && !strcmp(a, "-O"))
+			s->wget_stdout = 0;                     /* name from the URL */
+		else if ((is_curl && !strcmp(a, "-o")) || (!is_curl && !strcmp(a, "-O")))
+		{
+			if (argi + 1 >= argc) { vt_write(idx, usage); return; }
+			argi++;
+			if (!strcmp(argv[argi], "-"))
+				s->wget_stdout = 1;                 /* wget -O - */
+			else
+			{
+				s->wget_stdout = 0;
+				copy_cstr_trunc(s->wget_outname, sizeof(s->wget_outname), argv[argi]);
+			}
+		}
+		else
+		{
+			printf_s(idx, "%s: unknown option %s\r\n", argv[0], a);
+			vt_write(idx, usage);
+			return;
+		}
+	}
+	if (!url)
+	{
+		vt_write(idx, usage);
 		return;
 	}
-
-	if (strcmp(argv[argi], "-n") == 0 || strcmp(argv[argi], "--no-progress") == 0)
-	{
-		no_progress = 1;
-		argi++;
-	}
-
-	if (argi >= argc)
-	{
-		vt_write(idx, "usage: wget [-n] <url>\r\n");
-		return;
-	}
-
-	if (argi + 1 < argc)
-	{
-		vt_write(idx, "wget: too many arguments\r\n");
-		vt_write(idx, "usage: wget [-n] <url>\r\n");
-		return;
-	}
+	if (s->wget_head) s->wget_stdout = 1;
 
 	if (s->worker_mode == WORKER_NC)
 	{
@@ -8071,7 +8764,7 @@ static void cmd_wget(int idx, int argc, char** argv)
 		return;
 	}
 
-	strncpy(s->wget_url, argv[argi], sizeof(s->wget_url) - 1);
+	strncpy(s->wget_url, url, sizeof(s->wget_url) - 1);
 	s->wget_url[sizeof(s->wget_url) - 1] = '\0';
 	s->wget_no_progress = no_progress ? 1 : 0;
 
@@ -9527,7 +10220,7 @@ static int escape_and_append(char* line, int pos, int max, const char* src, int 
 
 static const char* shell_commands[] = {
 	"basename", "cal", "cat", "cd", "chattr", "chmod", "chown", "clear",
-	"cls", "cmp", "colors", "copy", "cp", "crc32", "cut", "date", "del",
+	"cls", "cmp", "colors", "copy", "cp", "crc32", "curl", "cut", "date", "del",
 	"delete", "df", "dir", "dirname", "dos2unix", "echo", "entropy", "exit", "file",
 	"fixtype", "fold", "free", "ftp", "getinfo", "grep", "head", "help", "hexdump",
 	"history", "host", "hostname", "ifconfig", "info", "label", "less",
@@ -10074,8 +10767,15 @@ static void redir_close(int idx)
 	}
 }
 
+static void ftp_interactive_line(int idx, char* line);
+
 static void shell_execute(int idx, char* line)
 {
+	if (sessions[idx].ftp_mode != FTP_MODE_OFF)
+	{
+		ftp_interactive_line(idx, line);
+		return;
+	}
 	char line_copy[256];
 	char* redir_file = NULL;
 	int redir_append = 0;
@@ -10155,6 +10855,7 @@ static void shell_execute(int idx, char* line)
 	else if (strcmp(cmd, "df") == 0)         cmd_df(idx, argc, argv);
 	else if (strcmp(cmd, "date") == 0)       cmd_date(idx, argc, argv);
 	else if (strcmp(cmd, "uname") == 0)      cmd_uname(idx, argc, argv);
+	else if (strcmp(cmd, "curl") == 0)       cmd_wget(idx, argc, argv);
 	else if (strcmp(cmd, "entropy") == 0)    cmd_entropy(idx, argc, argv);
 	else if (strcmp(cmd, "free") == 0)       cmd_free(idx, argc, argv);
 	else if (strcmp(cmd, "ps") == 0)         cmd_ps(idx, argc, argv);
@@ -10254,6 +10955,15 @@ void shell_prompt(int idx)
 	char dirname[64];
 	char esc[20];
 	int c = prefs.prompt_color;
+
+	switch (s->ftp_mode)
+	{
+		case FTP_MODE_ASK_USER: printf_s(idx, "Name (%s:anonymous): ", s->ftp_host); return;
+		case FTP_MODE_ASK_PASS: vt_write(idx, "Password: "); return;
+		case FTP_MODE_CONNECTING: return;
+		case FTP_MODE_READY: vt_write(idx, "\033[1mftp>\033[0m "); return;
+		default: break;
+	}
 
 	get_dir_name(s->shell_vRefNum, s->shell_dirID, dirname, sizeof(dirname));
 
@@ -10453,6 +11163,44 @@ void shell_input(int session_idx, unsigned char c, int modifiers, unsigned char 
 			if (s->endpoint != kOTInvalidEndpointRef)
 				OTCancelSynchronousCalls(s->endpoint, kOTCanceledErr);
 			vt_write(session_idx, "^C\r\n");
+		}
+		return;
+	}
+
+	/* typing a password: nothing is echoed, stored in history or recallable */
+	if (s->hide_input)
+	{
+		if (c == kReturnCharCode || vkeycode == 0x4C)
+		{
+			vt_write(session_idx, "\r\n");
+			s->shell_line[s->shell_line_len] = '\0';
+			s->hide_input = 0;
+			shell_execute(session_idx, s->shell_line);
+			memset(s->shell_line, 0, sizeof(s->shell_line));
+			s->shell_line_len = 0;
+			s->shell_cursor_pos = 0;
+			if (sessions[session_idx].in_use && !local_shell_worker_active(s))
+				shell_prompt(session_idx);
+		}
+		else if (c == kBackspaceCharCode)
+		{
+			if (s->shell_line_len > 0)
+				s->shell_line[--s->shell_line_len] = '\0';
+		}
+		else if (c == 3 || c == 4 || c == '\033')
+		{
+			memset(s->shell_line, 0, sizeof(s->shell_line));
+			s->shell_line_len = 0;
+			s->shell_cursor_pos = 0;
+			s->hide_input = 0;
+			s->ftp_mode = FTP_MODE_OFF;
+			vt_write(session_idx, "^C\r\n");
+			shell_prompt(session_idx);
+		}
+		else if (c >= 32 && c < 127 && s->shell_line_len < (int)sizeof(s->shell_line) - 1)
+		{
+			s->shell_line[s->shell_line_len++] = c;
+			s->shell_line[s->shell_line_len] = '\0';
 		}
 		return;
 	}

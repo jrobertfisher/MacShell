@@ -43,6 +43,8 @@ enum SESSION_TYPE { SESSION_NONE, SESSION_SSH, SESSION_LOCAL, SESSION_TELNET };
 enum THREAD_COMMAND { WAIT, READ, EXIT };
 enum THREAD_STATE { UNINITIALIZED, OPEN, CLEANUP, DONE };
 enum WORKER_MODE { WORKER_NONE, WORKER_NC, WORKER_WGET, WORKER_SCP, WORKER_FTP };
+/* interactive ftp session (ftp host) */
+enum FTP_MODE { FTP_MODE_OFF, FTP_MODE_ASK_USER, FTP_MODE_ASK_PASS, FTP_MODE_CONNECTING, FTP_MODE_READY };
 
 // per-session state (terminal + connection + thread)
 struct session
@@ -107,6 +109,12 @@ struct session
 	int shell_saved_len;
 	char wget_url[512]; // last/active wget URL for local wget worker
 	unsigned char wget_no_progress; // wget -n disables live progress redraw
+	unsigned char wget_is_curl;     // 1 = curl: quiet, screen output, redirects only with -L
+	unsigned char wget_stdout;      // write the body to the terminal
+	unsigned char wget_head;        // curl -I: request headers only
+	unsigned char wget_follow;      // follow redirects
+	unsigned char wget_binary_stop; // body looked binary while printing to the terminal
+	char wget_outname[32];          // -o/-O name; empty = name from the URL
 
 	// SCP state: set by cmd_scp() before worker spawn, read-only by worker
 	char scp_user[256];
@@ -132,6 +140,11 @@ struct session
 
 	// FTP state: set by cmd_ftp()/cmd_wget() before worker spawn
 	char ftp_host[256];
+	int ftp_active;              /* 1 = active mode (PORT), 0 = passive (PASV) */
+	enum FTP_MODE ftp_mode;      /* interactive session state */
+	EndpointRef ftp_ctrl_ep;     /* open control connection (interactive) */
+	char ftp_cmdline[256];       /* command for the ftp worker thread */
+	int hide_input;              /* typing a password: no echo, no history */
 	char ftp_user[256];
 	char ftp_password[256];
 	unsigned short ftp_port;          /* default 21 */
