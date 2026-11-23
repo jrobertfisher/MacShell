@@ -151,6 +151,7 @@ struct session
 	int shell_at_root;           /* cwd is "/", the list of disks */
 	int sshd_owned;              /* this tab belongs to an incoming SSH connection */
 	int sshd_tap;                /* send its output to that connection */
+	int sshd_exec;               /* running one command for ssh: no paging */
 	int shell_has_prev;          /* cd -: the previous folder */
 	int shell_prev_at_root;
 	short shell_prev_vRefNum;
@@ -296,6 +297,9 @@ int key_dialog(void);
 
 /* set by the shell's "ssh user@host": connect without the Connect dialog */
 extern int ssh_skip_connect_dialog;
+
+/* set while creating a tab that shouldn't become the active one */
+extern int new_session_background;
 
 // session management
 int new_session(struct window_context* wc, enum SESSION_TYPE type);

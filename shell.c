@@ -276,6 +276,7 @@ static void get_dir_name(short vRefNum, long dirID, char* out, int maxlen)
 }
 
 static int sub_folder(short vRefNum, long parent, const char* name, int create, long* dirID);
+static int volume_space_k(short vref, unsigned long* total_k, unsigned long* free_k);
 static int is_directory(FSSpec* spec);
 static long get_dir_id(FSSpec* spec);
 
@@ -1149,9 +1150,8 @@ static void ls_show_volumes(int idx, int long_fmt)
 		mac_name_to_unix(vname, name, sizeof name);
 		if (long_fmt)
 		{
-			unsigned long blk = pb.volumeParam.ioVAlBlkSiz;
-			unsigned long total_k = (unsigned long)pb.volumeParam.ioVNmAlBlks * (blk / 512) / 2;
-			unsigned long free_k = (unsigned long)pb.volumeParam.ioVFrBlk * (blk / 512) / 2;
+			unsigned long total_k = 0, free_k = 0;
+			volume_space_k(pb.volumeParam.ioVRefNum, &total_k, &free_k);
 			printf_s(idx, "%s%s%s/  %lu K, %lu K free%s\r\n", ls_use_color ? "\033[1;34m" : "", name,
 			         ls_use_color ? "\033[0m" : "", total_k, free_k,
 			         (pb.volumeParam.ioVAtrb & 0x8080) ? ", locked" : "");
@@ -1565,7 +1565,7 @@ static void shell_paged_write(int idx, const char** lines, int nlines)
 		vt_write(idx, "\r\n");
 		line_count++;
 
-		if (line_count >= page_size && i + 1 < nlines)
+		if (line_count >= page_size && i + 1 < nlines && !sessions[idx].sshd_exec)
 		{
 			if (shell_more_prompt(idx))
 				return; /* user pressed q */
@@ -2354,84 +2354,91 @@ static void fmt_human(char* buf, int bufsz, long bytes)
 		snprintf(buf, bufsz, "%ld KB", bytes / 1024L);
 }
 
+/* a disk's size and free space in KB; uses PBXGetVolInfo (exact, any size)
+   when the file system has it, else PBHGetVInfo */
+static int volume_space_k(short vref, unsigned long* total_k, unsigned long* free_k)
+{
+	long fs_attr = 0;
+	if (Gestalt(gestaltFSAttr, &fs_attr) == noErr && (fs_attr & (1L << gestaltFSSupports2TBVols)))
+	{
+		XVolumeParam xp;
+		memset(&xp, 0, sizeof xp);
+		xp.ioVRefNum = vref;
+		xp.ioVolIndex = 0;
+		if (PBXGetVolInfoSync(&xp) == noErr)
+		{
+			unsigned char t[8], f[8];
+			memcpy(t, &xp.ioVTotalBytes, 8);
+			memcpy(f, &xp.ioVFreeBytes, 8);
+			/* bytes (64-bit, big-endian) / 1024 */
+			*total_k = ((unsigned long)t[2] << 30) | ((unsigned long)t[3] << 22) | ((unsigned long)t[4] << 14) |
+			           ((unsigned long)t[5] << 6) | ((unsigned long)t[6] >> 2);
+			*free_k = ((unsigned long)f[2] << 30) | ((unsigned long)f[3] << 22) | ((unsigned long)f[4] << 14) |
+			          ((unsigned long)f[5] << 6) | ((unsigned long)f[6] >> 2);
+			return 1;
+		}
+	}
+	{
+		HParamBlockRec pb;
+		unsigned long blk;
+		memset(&pb, 0, sizeof pb);
+		pb.volumeParam.ioVRefNum = vref;
+		pb.volumeParam.ioVolIndex = 0;
+		if (PBHGetVInfoSync(&pb) != noErr) return 0;
+		blk = (unsigned long)pb.volumeParam.ioVAlBlkSiz / 1024;
+		if (blk == 0) blk = 1;
+		*total_k = (unsigned long)(unsigned short)pb.volumeParam.ioVNmAlBlks * blk;
+		*free_k = (unsigned long)(unsigned short)pb.volumeParam.ioVFrBlk * blk;
+		return 1;
+	}
+}
+
+/* KB as "812K", "1.0M", "3.4G" */
+static void fmt_k(char* buf, int size, unsigned long k)
+{
+	if (k < 1024) snprintf(buf, size, "%luK", k);
+	else if (k < 1024UL * 1024) snprintf(buf, size, "%lu.%luM", k / 1024, (k % 1024) * 10 / 1024);
+	else snprintf(buf, size, "%lu.%luG", k / (1024UL * 1024), (k % (1024UL * 1024)) * 10 / (1024UL * 1024));
+}
+
+/* df [-m|-h]: every mounted disk */
 static void cmd_df(int idx, int argc, char* argv[])
 {
-	struct session* s = &sessions[idx];
-	HParamBlockRec pb;
-	Str255 name;
 	int mode = 0; /* 0=KB, 1=MB, 2=human */
+	short i;
 
 	if (argc > 1 && strcmp(argv[1], "-m") == 0) mode = 1;
 	if (argc > 1 && strcmp(argv[1], "-h") == 0) mode = 2;
 
-	memset(&pb, 0, sizeof(pb));
-	name[0] = 0;
-	pb.volumeParam.ioNamePtr = name;
-	pb.volumeParam.ioVRefNum = s->shell_vRefNum;
-	pb.volumeParam.ioVolIndex = 0;
-
-	if (PBHGetVInfoSync(&pb) != noErr)
+	printf_s(idx, "%-24s %10s %10s %10s %4s\r\n", "Disk",
+	         mode == 0 ? "1K-blocks" : "Size", "Used", "Avail", "Use%");
+	for (i = 1; ; i++)
 	{
-		vt_write(idx, "df: cannot get volume info\r\n");
-		return;
-	}
-
-	/* volume name */
-	{
-		char vname[256];
-		int len = name[0];
-		if (len > 255) len = 255;
-		memcpy(vname, name + 1, len);
-		vname[len] = '\0';
-
-		vt_write(idx, "Volume:    ");
-		vt_write(idx, vname);
-		vt_write(idx, "\r\n");
-	}
-
-	{
-		long total_bytes = (long)pb.volumeParam.ioVNmAlBlks *
-		                   (long)pb.volumeParam.ioVAlBlkSiz;
-		long free_bytes  = (long)pb.volumeParam.ioVFrBlk *
-		                   (long)pb.volumeParam.ioVAlBlkSiz;
-		long used_bytes  = total_bytes - free_bytes;
-		char buf[32];
-
+		HParamBlockRec pb;
+		Str255 vname;
+		char name[64], path[66];
+		unsigned long total, freek, used;
+		memset(&pb, 0, sizeof pb);
+		vname[0] = 0;
+		pb.volumeParam.ioNamePtr = vname;
+		pb.volumeParam.ioVolIndex = i;
+		if (PBHGetVInfoSync(&pb) != noErr) break;
+		if (!volume_space_k(pb.volumeParam.ioVRefNum, &total, &freek)) continue;
+		used = total > freek ? total - freek : 0;
+		mac_name_to_unix(vname, name, sizeof name);
+		snprintf(path, sizeof path, "/%s", name);
 		if (mode == 2)
 		{
-			vt_write(idx, "Total:     ");
-			fmt_human(buf, sizeof(buf), total_bytes);
-			vt_write(idx, buf);
-			vt_write(idx, "\r\nUsed:      ");
-			fmt_human(buf, sizeof(buf), used_bytes);
-			vt_write(idx, buf);
-			vt_write(idx, "\r\nAvailable: ");
-			fmt_human(buf, sizeof(buf), free_bytes);
-			vt_write(idx, buf);
-			vt_write(idx, "\r\n");
+			char a[16], b2[16], c2[16];
+			fmt_k(a, sizeof a, total); fmt_k(b2, sizeof b2, used); fmt_k(c2, sizeof c2, freek);
+			printf_s(idx, "%-24s %10s %10s %10s %3lu%%\r\n", path, a, b2, c2,
+			         total ? (used / (total / 100 + 1)) : 0);
 		}
 		else
 		{
-			long divisor = mode ? (1024L * 1024L) : 1024L;
-			const char* unit = mode ? "MB" : "KB";
-
-			vt_write(idx, "Total:     ");
-			vt_print_long(idx, total_bytes / divisor);
-			vt_write(idx, " ");
-			vt_write(idx, unit);
-			vt_write(idx, "\r\n");
-
-			vt_write(idx, "Used:      ");
-			vt_print_long(idx, used_bytes / divisor);
-			vt_write(idx, " ");
-			vt_write(idx, unit);
-			vt_write(idx, "\r\n");
-
-			vt_write(idx, "Available: ");
-			vt_print_long(idx, free_bytes / divisor);
-			vt_write(idx, " ");
-			vt_write(idx, unit);
-			vt_write(idx, "\r\n");
+			unsigned long d = mode ? 1024 : 1;
+			printf_s(idx, "%-24s %10lu %10lu %10lu %3lu%%\r\n", path, total / d, used / d, freek / d,
+			         total ? (used / (total / 100 + 1)) : 0);
 		}
 	}
 }
@@ -10240,7 +10247,7 @@ static void scp_download(int idx)
 		pname[0] = nlen;
 		memcpy(pname + 1, s->scp_local_path, nlen);
 
-		ferr = HCreate(s->shell_vRefNum, s->shell_dirID, pname, 'SeT7', 'TEXT');
+		ferr = HCreate(s->shell_vRefNum, s->shell_dirID, pname, 'ttxt', 'TEXT');
 		if (ferr == dupFNErr)
 		{
 			/* file exists — overwrite */
@@ -10330,7 +10337,7 @@ static void scp_download(int idx)
 	if (total_read > 0)
 	{
 		OSType ftype = 'TEXT';
-		OSType fcreator = 'SeT7';
+		OSType fcreator = 'ttxt';
 		Str255 pname;
 		FInfo finfo;
 		int nlen = strlen(s->scp_local_path);
@@ -11454,8 +11461,8 @@ static void cmd_help(int idx, int argc, char* argv[])
 		"Bytes      hexdump xxd cmp md5sum sha1sum sha256sum sha512sum crc32",
 		"Mac files  getinfo chown settype setcreator fixtype chmod chattr label",
 		"System     date cal uptime uname hostname df free ps history clear colors",
-		"Network    ssh ssh-keygen scp ftp wget curl telnet nc ping host ifconfig",
-		"           entropy",
+		"Network    ssh ssh-keygen sshd scp ftp wget curl telnet nc ping host",
+		"           ifconfig entropy",
 		"Shell      help man exit",
 		"",
 		"Other names: dir (ls), more less type (cat), copy (cp), ren rename (mv),",
@@ -12046,7 +12053,7 @@ static short redir_open(int idx, const char* path, int append)
 	if (e == fnfErr)
 	{
 		/* create it */
-		e = FSpCreate(&spec, 'SeT7', 'TEXT', smSystemScript);
+		e = FSpCreate(&spec, 'ttxt', 'TEXT', smSystemScript);
 		if (e != noErr)
 		{
 			vt_write(idx, "redirect: cannot create file\r\n");
@@ -12381,6 +12388,7 @@ void shell_init(int session_idx)
 	/* a tab opened for an incoming SSH connection */
 	s->sshd_owned = 0;
 	s->sshd_tap = 0;
+	s->sshd_exec = 0;
 	sshd_claim_session(session_idx);
 
 	/* start in ~ (Documents on the startup disk), like a Unix shell */

@@ -1418,6 +1418,16 @@ int sshd_start(int idx, unsigned short port)
 		return 0;
 
 	g_port = port;
+	{
+		/* the server gets its own tab for its messages */
+		int log_idx = new_session(&windows[active_window], SESSION_LOCAL);
+		if (log_idx >= 0)
+		{
+			snprintf(sessions[log_idx].tab_label, sizeof(sessions[log_idx].tab_label), "sshd");
+			printf_s(idx, "sshd: started in its own tab (close that tab to stop it)\r\n");
+			idx = log_idx;
+		}
+	}
 	g_msg_idx = idx;
 	g_stop = 0;
 	g_running = 1;
@@ -1441,9 +1451,10 @@ void sshd_stop(int idx)
 		printf_s(idx, "sshd: not running\r\n");
 		return;
 	}
-	g_msg_idx = idx;
+	if (g_msg_idx < 0 || !sessions[g_msg_idx].in_use) g_msg_idx = idx;
 	g_stop = 1;
 	if (g_conn) g_conn->alive = 0;
+	printf_s(idx, "sshd: stopping\r\n");
 }
 
 void sshd_status(int idx)
@@ -1476,6 +1487,16 @@ void sshd_claim_session(int idx)
 
 void sshd_session_closing(int idx)
 {
+	/* closing the sshd tab stops the server */
+	if (idx == g_msg_idx)
+	{
+		g_msg_idx = -1;
+		if (g_running)
+		{
+			g_stop = 1;
+			if (g_conn) g_conn->alive = 0;
+		}
+	}
 	if (!sessions[idx].sshd_owned) return;
 	sessions[idx].sshd_owned = 0;
 	sessions[idx].sshd_tap = 0;
@@ -1583,7 +1604,9 @@ void sshd_tick(void)
 	{
 		struct window_context* wc = &windows[active_window];
 		g_claim_pending = 1;
+		new_session_background = 1;                     /* don't take over the user's tab */
 		idx = new_session(wc, SESSION_LOCAL);
+		new_session_background = 0;
 		g_claim_pending = 0;
 		if (idx < 0 || c->session_idx != idx)
 		{
@@ -1594,6 +1617,7 @@ void sshd_tick(void)
 		if (c->want_session == 2)
 		{
 			sessions[idx].sshd_tap = 1;
+			sessions[idx].sshd_exec = 1;
 			shell_run_line(idx, c->exec_cmd);
 			c->exec_started = 1;
 		}

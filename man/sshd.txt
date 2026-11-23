@@ -9,13 +9,14 @@ SYNOPSIS
 DESCRIPTION
     Runs a small SSH server in the background (port 22 unless given), so
     you can log in to this Mac from another computer with ssh. It is off
-    until you start it, and stops when MacShell quits.
+    until you start it. It opens its own sshd tab for its messages;
+    closing that tab, sshd stop, or quitting MacShell stops it.
 
     Logins use keys only, never passwords: the public key must be a line
     in ~/.ssh/authorized_keys on this Mac (ECDSA P-256 or RSA of 2048
     bits or more). Ed25519 keys aren't supported. One connection at a
-    time; each opens its own MacShell tab, which closes when the other
-    computer logs out. A command given to ssh runs and returns:
+    time; each opens its own MacShell tab in the background (your tab
+    stays in front), which closes when the other computer logs out. A command given to ssh runs and returns:
         ssh user@mac 'ls -l'
 
     The first start makes this Mac's host key (ECDSA P-256), kept in

@@ -1216,6 +1216,8 @@ static void adjust_window_for_tabs(struct window_context* wc, int tabs_appeared)
 	}
 }
 
+int new_session_background = 0;
+
 int new_session(struct window_context* wc, enum SESSION_TYPE type)
 {
 	if (wc->num_sessions >= MAX_SESSIONS) return -1;
@@ -1274,13 +1276,14 @@ int new_session(struct window_context* wc, enum SESSION_TYPE type)
 	}
 	else if (type == SESSION_LOCAL)
 	{
-		snprintf(sessions[idx].tab_label, sizeof(sessions[idx].tab_label), "local shell");
+		snprintf(sessions[idx].tab_label, sizeof(sessions[idx].tab_label), "MacShell");
 	}
 	else if (type == SESSION_TELNET)
 	{
 		snprintf(sessions[idx].tab_label, sizeof(sessions[idx].tab_label), "telnet");
 	}
-	switch_session(wc, idx);
+	if (!new_session_background)
+		switch_session(wc, idx);
 
 	// enable Close Tab now that we have multiple sessions
 	if (wc->num_sessions > 1)
