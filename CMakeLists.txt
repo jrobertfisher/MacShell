@@ -67,3 +67,6 @@ add_custom_target(MacShell_bundle_flag ALL
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/set_bundle_bit.py MacShell.bin
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 add_dependencies(MacShell_bundle_flag MacShell_APPL)
+
+# resources.r includes constants.r: rebuild the resources when it changes
+set_source_files_properties(resources.r PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/constants.r)
