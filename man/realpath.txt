@@ -1,0 +1,12 @@
+NAME
+    realpath - show a full path
+
+SYNOPSIS
+    realpath <path>
+
+DESCRIPTION
+    Prints the full path of a file or folder, such as
+    /Macintosh HD/Documents/notes.txt.
+
+SEE ALSO
+    pwd, basename, dirname

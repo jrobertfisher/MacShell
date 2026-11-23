@@ -1,0 +1,16 @@
+NAME
+    host - look up a name or address
+
+SYNOPSIS
+    host <name|address>
+
+DESCRIPTION
+    Looks up a host name's IP address with DNS, or the name of an IP
+    address.
+
+EXAMPLES
+    host example.com
+    host 192.168.0.1
+
+SEE ALSO
+    ping, ifconfig

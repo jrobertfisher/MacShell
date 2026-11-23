@@ -1,0 +1,12 @@
+NAME
+    mac2unix - convert Mac line endings to Unix
+
+SYNOPSIS
+    mac2unix <file>
+
+DESCRIPTION
+    Changes a file's classic Mac line endings (CR) to Unix ones (LF), in
+    place, for use on Linux or macOS.
+
+SEE ALSO
+    unix2mac, dos2unix

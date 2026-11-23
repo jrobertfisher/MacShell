@@ -1,0 +1,12 @@
+NAME
+    touch - create a file or update its date
+
+SYNOPSIS
+    touch <file>
+
+DESCRIPTION
+    Creates an empty file, or sets an existing file's modification date
+    to now.
+
+SEE ALSO
+    ls, getinfo

@@ -1,0 +1,16 @@
+NAME
+    chattr - set the locked and invisible flags
+
+SYNOPSIS
+    chattr [+-][li] <file>
+
+DESCRIPTION
+    Turns flags on (+) or off (-): l is locked, i is invisible (hidden in
+    the Finder; ls -a still shows it).
+
+EXAMPLES
+    chattr +i secret.txt
+    chattr -l notes.txt
+
+SEE ALSO
+    chmod, ls, getinfo

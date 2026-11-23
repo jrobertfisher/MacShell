@@ -1,0 +1,13 @@
+NAME
+    strings - find text inside a file
+
+SYNOPSIS
+    strings [-n N] <file>
+    strings -N <file>
+
+DESCRIPTION
+    Prints runs of at least 4 (or N) printable characters found in a
+    file, such as messages inside an application.
+
+SEE ALSO
+    hexdump, grep

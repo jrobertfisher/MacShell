@@ -1,0 +1,28 @@
+NAME
+    wget - download a file from the web
+
+SYNOPSIS
+    wget [-n] [-O file | -O -] <url>
+
+DESCRIPTION
+    Downloads http, https or ftp URLs to a file named from the URL
+    (index.html for a site's address). It never overwrites a file; it
+    saves as name.1, name.2 and so on instead. Redirects are followed.
+    MacBinary downloads are unpacked (the .bin is kept), and type and
+    creator are set from the file name.
+
+    HTTPS connections are encrypted, but the server's certificate can't be
+    checked (classic Mac OS has no certificate store), so wget warns each
+    time. Don't rely on it for anything sensitive.
+
+OPTIONS
+    -O file   save as file (replacing it)
+    -O -      show the download on the screen
+    -n        don't show the progress line
+
+EXAMPLES
+    wget http://example.com/file.sit
+    wget -O page.html https://example.com/
+
+SEE ALSO
+    curl, ftp

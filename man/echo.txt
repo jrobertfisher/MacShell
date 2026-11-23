@@ -1,0 +1,17 @@
+NAME
+    echo - print text
+
+SYNOPSIS
+    echo [text ...]
+
+DESCRIPTION
+    Prints its arguments separated by spaces. With > or >> it writes the
+    text to a file.
+
+EXAMPLES
+    echo Hello
+    echo "first line" > notes.txt
+    echo "another line" >> notes.txt
+
+SEE ALSO
+    cat, macshell

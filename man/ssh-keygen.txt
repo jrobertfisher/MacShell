@@ -1,0 +1,26 @@
+NAME
+    ssh-keygen - make an SSH key pair
+
+SYNOPSIS
+    ssh-keygen [-f name] [-C comment]
+
+DESCRIPTION
+    Makes an ECDSA P-256 key pair on this Mac, so the private key never
+    leaves it. They are saved as id_ecdsa (private) and id_ecdsa.pub
+    (public) in ~/.ssh, which is created if needed; existing keys are
+    never overwritten. It asks for a passphrase twice (press Return for
+    none) and prints the public key and its fingerprint.
+
+    Add the public key line to ~/.ssh/authorized_keys on the computers you
+    want to log in to. ssh then uses the key automatically.
+
+OPTIONS
+    -f name   save as name and name.pub in the current folder instead
+    -C text   comment at the end of the public key (default MacShell)
+
+EXAMPLES
+    ssh-keygen
+    ssh-keygen -f work_key -C "Mac LC"
+
+SEE ALSO
+    ssh, entropy

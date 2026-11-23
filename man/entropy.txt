@@ -1,0 +1,16 @@
+NAME
+    entropy - show the randomness gathered
+
+SYNOPSIS
+    entropy
+
+DESCRIPTION
+    SSH and HTTPS need unpredictable random numbers, which classic Mac
+    OS doesn't provide. MacShell gathers them at start-up from sound input
+    noise and clock jitter, after health tests, plus a seed file saved
+    from the last run. entropy shows how many bits each source gave.
+    Secure connections need 256 bits; if there aren't enough, MacShell
+    asks you to move the mouse and type a few keys.
+
+SEE ALSO
+    ssh, ssh-keygen

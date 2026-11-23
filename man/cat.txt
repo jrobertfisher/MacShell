@@ -1,0 +1,18 @@
+NAME
+    cat, more, less, type - show a file's contents
+
+SYNOPSIS
+    cat <file>
+
+DESCRIPTION
+    Prints a text file to the screen. more, less and type are other
+    names for cat; they don't pause between pages, so use Shift+Page Up to
+    scroll back, or head and tail to see part of a long file. Mac (CR),
+    Unix (LF) and DOS (CRLF) line endings are all shown correctly.
+
+EXAMPLES
+    cat ~/.ssh/id_ecdsa.pub
+    cat notes.txt > copy.txt
+
+SEE ALSO
+    head, tail, less, hexdump

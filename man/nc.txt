@@ -1,0 +1,16 @@
+NAME
+    nc - raw TCP connection
+
+SYNOPSIS
+    nc <host> <port>
+
+DESCRIPTION
+    Connects to a TCP port in this tab: what you type is sent when you
+    press Return, and what arrives is shown. Ctrl+C or Ctrl+D closes the
+    connection.
+
+EXAMPLES
+    nc 192.168.0.1 80
+
+SEE ALSO
+    telnet, ping

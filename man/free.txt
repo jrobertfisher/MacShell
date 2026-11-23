@@ -1,0 +1,17 @@
+NAME
+    free - show memory use
+
+SYNOPSIS
+    free [-m|-h]
+
+DESCRIPTION
+    Shows memory: MacShell's own memory (its heap and largest free
+    block), the system heap, and temporary memory available from the
+    system.
+
+OPTIONS
+    -m        sizes in megabytes
+    -h        sizes in the most readable unit
+
+SEE ALSO
+    ps, df

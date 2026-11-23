@@ -1,0 +1,11 @@
+NAME
+    hostname - show the Mac's name
+
+SYNOPSIS
+    hostname
+
+DESCRIPTION
+    Shows the computer's name from the Sharing Setup control panel.
+
+SEE ALSO
+    ifconfig

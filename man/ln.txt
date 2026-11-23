@@ -1,0 +1,15 @@
+NAME
+    ln - make a Finder alias
+
+SYNOPSIS
+    ln -s <target> <alias>
+
+DESCRIPTION
+    Makes a Finder alias named alias that points to target, like the
+    Finder's Make Alias.
+
+EXAMPLES
+    ln -s ~/notes.txt notes-alias
+
+SEE ALSO
+    readlink

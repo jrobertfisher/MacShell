@@ -1,0 +1,8 @@
+NAME
+    rev - reverse each line
+
+SYNOPSIS
+    rev <file>
+
+DESCRIPTION
+    Prints each line of a file backwards.

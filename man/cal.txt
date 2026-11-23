@@ -1,0 +1,14 @@
+NAME
+    cal - show a calendar
+
+SYNOPSIS
+    cal
+    cal <month> [year]
+    cal <year>
+
+DESCRIPTION
+    With no arguments, shows this month. cal 3 shows March this year,
+    cal 3 1993 March 1993, and cal 1993 the whole year.
+
+SEE ALSO
+    date

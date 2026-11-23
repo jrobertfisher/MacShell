@@ -1,0 +1,12 @@
+NAME
+    history - show earlier commands
+
+SYNOPSIS
+    history
+
+DESCRIPTION
+    Lists the last 32 commands typed in this tab. Up and Down at the
+    prompt bring them back.
+
+SEE ALSO
+    macshell

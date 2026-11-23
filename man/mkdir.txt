@@ -1,0 +1,15 @@
+NAME
+    mkdir, md - create a folder
+
+SYNOPSIS
+    mkdir <name>
+
+DESCRIPTION
+    Creates a new folder.
+
+EXAMPLES
+    mkdir Projects
+    mkdir "~/New Folder"
+
+SEE ALSO
+    rmdir, cd

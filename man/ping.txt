@@ -1,0 +1,16 @@
+NAME
+    ping - check that a host answers
+
+SYNOPSIS
+    ping <host> [port]
+
+DESCRIPTION
+    Checks that a computer can be reached by making a TCP connection to
+    port (80 unless given) and reporting how long it took, in ms. It doesn't send
+    ICMP pings, so it works through firewalls that allow the port.
+
+EXAMPLES
+    ping 192.168.1.20 22
+
+SEE ALSO
+    host, nc

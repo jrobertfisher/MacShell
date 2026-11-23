@@ -1,0 +1,16 @@
+NAME
+    wc - count lines, words and bytes
+
+SYNOPSIS
+    wc [-lwc] <file>
+
+DESCRIPTION
+    Shows a file's number of lines, words and bytes.
+
+OPTIONS
+    -l        lines only
+    -w        words only
+    -c        bytes only
+
+SEE ALSO
+    grep

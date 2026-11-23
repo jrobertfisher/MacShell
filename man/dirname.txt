@@ -1,0 +1,12 @@
+NAME
+    dirname - a path without its last part
+
+SYNOPSIS
+    dirname <path>
+
+DESCRIPTION
+    Prints a path without its last part: dirname /Disk/Folder/file.txt
+    prints /Disk/Folder.
+
+SEE ALSO
+    basename, realpath

@@ -1,0 +1,20 @@
+NAME
+    xxd - hex dump, and back again
+
+SYNOPSIS
+    xxd <file>
+    xxd -r <file>
+
+DESCRIPTION
+    Shows a file as a hex dump in xxd's format. With -r, turns such a
+    dump back into the original bytes (use > to save them).
+
+OPTIONS
+    -r        reverse: hex dump to bytes
+
+EXAMPLES
+    xxd icon > icon.hex
+    xxd -r icon.hex > icon-copy
+
+SEE ALSO
+    hexdump

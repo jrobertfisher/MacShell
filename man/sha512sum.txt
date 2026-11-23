@@ -1,0 +1,12 @@
+NAME
+    sha512sum - SHA-512 checksum of a file
+
+SYNOPSIS
+    sha512sum <file>
+
+DESCRIPTION
+    Prints the SHA-512 checksum of a file's data fork, in the same format as
+    sha512sum on Linux, to check a download against a published value.
+
+SEE ALSO
+    sha256sum, crc32, cmp

@@ -1,0 +1,13 @@
+NAME
+    ifconfig - show network settings
+
+SYNOPSIS
+    ifconfig
+
+DESCRIPTION
+    Shows each network interface's IP address, netmask, broadcast
+    address, gateway (router) and DNS server, from Open Transport (the
+    TCP/IP control panel).
+
+SEE ALSO
+    host, hostname

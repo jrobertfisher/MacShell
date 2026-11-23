@@ -1,0 +1,11 @@
+NAME
+    crc32 - CRC-32 checksum of a file
+
+SYNOPSIS
+    crc32 <file>
+
+DESCRIPTION
+    Prints the CRC-32 of a file's data fork (the checksum used by zip).
+
+SEE ALSO
+    md5sum, sha256sum

@@ -1,0 +1,29 @@
+NAME
+    ssh - connect to a computer with SSH
+
+SYNOPSIS
+    ssh [user@]host[:port]
+    ssh
+
+DESCRIPTION
+    Opens an SSH session in a new tab. With user@host it connects at
+    once: it logs in with your key if ~/.ssh has id_ecdsa and
+    id_ecdsa.pub (asking for the passphrase only if the key has one), and
+    otherwise asks for the password. With only a host, it uses the last
+    user name. ssh on its own opens the Connect dialog, as does Cmd+K.
+
+    The first time you connect to a computer, MacShell shows its host key
+    fingerprint and asks whether to trust it; compare it with the
+    computer's own (ssh-keygen -lf /etc/ssh/ssh_host_*.pub there). If the
+    key changes later, MacShell refuses to connect.
+
+    Supported: ECDH (P-256/384/521) and Diffie-Hellman key exchange,
+    RSA and ECDSA keys, AES encryption, and strict key exchange against
+    the Terrapin attack. Ed25519 isn't supported.
+
+EXAMPLES
+    ssh me@192.168.1.20
+    ssh me@server.example.com:2222
+
+SEE ALSO
+    ssh-keygen, scp, entropy

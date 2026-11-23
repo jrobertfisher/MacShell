@@ -1,0 +1,15 @@
+NAME
+    tail - show the end of a file
+
+SYNOPSIS
+    tail [-n N] <file>
+    tail -N <file>
+
+DESCRIPTION
+    Shows the last 10 lines of a file, or the last N.
+
+EXAMPLES
+    tail -n 20 log.txt
+
+SEE ALSO
+    head, cat

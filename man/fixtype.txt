@@ -1,0 +1,13 @@
+NAME
+    fixtype - set type and creator from file names
+
+SYNOPSIS
+    fixtype <file ...>
+
+DESCRIPTION
+    Sets the type and creator of files from their name extensions
+    (.txt, .jpg, .sit and so on), for files copied from other computers
+    that show as blank documents. Wildcards work: fixtype *
+
+SEE ALSO
+    chown, getinfo

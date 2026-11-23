@@ -1,0 +1,50 @@
+NAME
+    ftp - transfer files with FTP
+
+SYNOPSIS
+    ftp [-A|-p] [user[:password]@]host[:port]
+    ftp get|put|ls [-n] [-A|-p] <arguments>
+
+DESCRIPTION
+    With a host, opens an interactive session. It asks for a user name;
+    press Return to log in anonymously (no password needed). Passwords
+    aren't shown as you type. Then, at the ftp> prompt:
+
+      ls [dir], dir       list a folder on the server
+      cd <dir>, cdup      change folder on the server; pwd shows it
+      get <file>          download into the current Mac folder
+      put <file> [name]   upload a file
+      mkdir, rmdir <dir>  make or remove a folder on the server
+      delete <file>       delete a file on the server
+      rename <old> <new>  rename a file on the server
+      size <file>         a file's size on the server
+      lcd, lpwd, lls      change, show or list the folder on the Mac
+      passive, active     choose how data connections are made
+      status, help        show the session, list these commands
+      bye                 close the session
+
+    Transfers are binary. A Mac file with a resource fork is uploaded as
+    MacBinary (.bin added), and a MacBinary download is unpacked with the
+    .bin kept. If the server refuses an upload, its reason is shown.
+
+    The one-shot form does a single transfer:
+      ftp get user@host:/path/file
+      ftp put <file> user@host:/dir/
+      ftp ls user@host:/dir/
+
+    FTP isn't encrypted: passwords and files cross the network as plain
+    text. Use scp on networks you don't trust.
+
+OPTIONS
+    -p        passive mode (the default): the Mac connects to the server
+    -A        active mode: the server connects back to the Mac, which
+              must be reachable from it
+    -n        (one-shot) don't show the progress line
+
+EXAMPLES
+    ftp 192.168.1.10
+    ftp -A me@server.example.com
+    ftp get ftp.example.com:/pub/file.sit
+
+SEE ALSO
+    scp, wget, curl

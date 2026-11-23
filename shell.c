@@ -11023,101 +11023,139 @@ static void cmd_readlink(int idx, int argc, char** argv)
 	vt_write(idx, "\r\n");
 }
 
+/* ------------------------------------------------------------------ */
+/* man and help: pages are TEXT resources made from man/*.txt         */
+/* ------------------------------------------------------------------ */
+
+#define MAN_FIRST_ID 3000
+
+/* show the manual page for name; returns 0 if there is none */
+static int man_show(int idx, const char* name)
+{
+	Str255 pn;
+	Handle h;
+	long size, i, nlines = 0, start;
+	char* text;
+	const char** lines;
+	int n = strlen(name);
+
+	if (n < 1 || n > 63) return 0;
+	pn[0] = n;
+	memcpy(pn + 1, name, n);
+	h = GetNamedResource('TEXT', pn);
+	if (h == NULL) return 0;
+	size = GetHandleSize(h);
+
+	text = NewPtr(size + 1);
+	if (text == NULL) { ReleaseResource(h); return 0; }
+	memcpy(text, *h, size);
+	text[size] = '\0';
+	ReleaseResource(h);
+
+	for (i = 0; i < size; i++)
+		if (text[i] == '\n') nlines++;
+	lines = (const char**)NewPtr((nlines + 1) * sizeof(char*));
+	if (lines == NULL) { DisposePtr(text); return 0; }
+
+	nlines = 0;
+	start = 0;
+	for (i = 0; i < size; i++)
+		if (text[i] == '\n')
+		{
+			text[i] = '\0';
+			lines[nlines++] = text + start;
+			start = i + 1;
+		}
+	if (start < size) lines[nlines++] = text + start;
+
+	shell_paged_write(idx, lines, nlines);
+	DisposePtr((Ptr)lines);
+	DisposePtr(text);
+	return 1;
+}
+
+/* man -k word: pages whose name or summary contains word */
+static void man_search(int idx, const char* word)
+{
+	short id;
+	int found = 0;
+	for (id = MAN_FIRST_ID; ; id++)
+	{
+		Handle h = Get1Resource('TEXT', id);
+		char line[128];
+		long size, i, k = 0, nl = 0;
+		if (h == NULL) break;
+		size = GetHandleSize(h);
+		/* the second line: "    name, alias - summary" */
+		for (i = 0; i < size && nl < 2; i++)
+		{
+			char c = (*h)[i];
+			if (c == '\n') { nl++; continue; }
+			if (nl == 1 && k < (long)sizeof(line) - 1) line[k++] = c;
+		}
+		line[k] = '\0';
+		ReleaseResource(h);
+		if (stristr(line, word) != NULL)
+		{
+			const char* p = line;
+			while (*p == ' ') p++;
+			vt_write(idx, p);
+			vt_write(idx, "\r\n");
+			found = 1;
+		}
+	}
+	if (!found)
+		printf_s(idx, "man: nothing found for %s\r\n", word);
+}
+
+static void cmd_man(int idx, int argc, char* argv[])
+{
+	if (argc == 3 && strcmp(argv[1], "-k") == 0)
+	{
+		man_search(idx, argv[2]);
+		return;
+	}
+	if (argc != 2 || argv[1][0] == '-')
+	{
+		vt_write(idx, "usage: man <command>     (man macshell for paths, redirection and keys)\r\n"
+		              "       man -k <word>     search the pages\r\n");
+		return;
+	}
+	if (!man_show(idx, argv[1]))
+		printf_s(idx, "man: no manual page for %s (type 'help' for the commands)\r\n", argv[1]);
+}
+
 static void cmd_help(int idx, int argc, char* argv[])
 {
 	static const char* help_lines[] = {
-		"MacShell - commands:",
+		"MacShell commands. 'man <command>' or '<command> --help' explains one;",
+		"'man macshell' covers paths, wildcards, > and >>, and keys.",
 		"",
-		"  \033[1mFile operations:\033[0m",
-		"    ls [-la] [path]    list directory",
-		"    cd [path]          change directory",
-		"    pwd                print working directory",
-		"    cat <file>         show file contents",
-		"    head [-n N] <file> show first N lines",
-		"    tail [-n N] <file> show last N lines",
-		"    grep [-ivnc] s f   search for string in file",
-		"    hexdump <file>     hex + ASCII dump",
-		"    strings [-n N] f   printable strings in file",
-		"    xxd [-r] <file>    xxd-style dump (-r=reverse)",
-		"    nl <file>          cat with line numbers",
-		"    cut -d. -f1,3 f    extract delimited fields",
-		"    fold [-w N] <file> wrap lines to N columns",
-		"    rev <file>         reverse each line",
-		"    cmp <f1> <f2>      compare two files",
-		"    cp <src> <dst>     copy file (both forks)",
-		"    mv <old> <new>     rename file",
-		"    rm [-i] <file>     delete file (-i=confirm)",
-		"    mkdir <name>       create directory",
-		"    rmdir <dir>        remove empty directory",
-		"    touch <file>       create or update timestamp",
-		"    ln -s <tgt> <lnk>  create Mac alias",
-		"    readlink <alias>   show alias target",
-		"    realpath <path>    full absolute path",
-		"    which <command>    find application path",
-		"    wc [-lwc] <file>   line/word/byte count",
-		"    rot13 <file>       ROT13 encode/decode",
-		"    dos2unix <file>    CRLF to LF (in-place)",
-		"    unix2dos <file>    LF to CRLF (in-place)",
-		"    mac2unix <file>    CR to LF (in-place)",
-		"    unix2mac <file>    LF to CR (in-place)",
+		"Files      ls cd pwd cat head tail cp mv rm mkdir rmdir touch ln readlink",
+		"           realpath basename dirname which open",
+		"Text       grep wc nl cut fold rev rot13 strings echo seq",
+		"           dos2unix unix2dos mac2unix unix2mac",
+		"Bytes      hexdump xxd cmp md5sum sha1sum sha256sum sha512sum crc32",
+		"Mac files  getinfo chown settype setcreator fixtype chmod chattr label",
+		"System     date cal uptime uname hostname df free ps history clear colors",
+		"Network    ssh ssh-keygen scp ftp wget curl telnet nc ping host ifconfig",
+		"           entropy",
+		"Shell      help man exit",
 		"",
-		"  \033[1mChecksums:\033[0m",
-		"    md5sum <file>      MD5 hash",
-		"    sha1sum <file>     SHA-1 hash",
-		"    sha256sum <file>   SHA-256 hash",
-		"    sha512sum <file>   SHA-512 hash",
-		"    crc32 <file>       CRC32 checksum",
+		"Other names: dir (ls), more less type (cat), copy (cp), ren rename (mv),",
+		"del delete (rm), md (mkdir), rd (rmdir), cls (clear), info file (getinfo),",
+		"quit (exit).",
 		"",
-		"  \033[1mMac-specific:\033[0m",
-		"    getinfo <file>     show full file info",
-		"    chown TYPE:CREA f  set type/creator codes",
-		"    settype TYPE f     set file type",
-		"    setcreator CREA f  set file creator",
-		"    chmod +w|-w f      unlock/lock file",
-		"    chattr [+-]li f    set lock/invisible",
-		"    label <0-7> f      set Finder label color",
-		"",
-		"  \033[1mSystem:\033[0m",
-		"    basename <path>    filename part of path",
-		"    dirname <path>     directory part of path",
-		"    seq [first] last   print number sequence",
-		"    sleep <seconds>    wait N seconds",
-		"    echo [text...]     print text",
-		"    clear              clear screen",
-		"    df [-m|-h]         show disk usage",
-		"    date               show date/time",
-		"    uptime             time since boot",
-		"    cal                calendar for this month",
-		"    uname              show system info",
-		"    hostname           computer name",
-		"    free [-m|-h]       show memory usage",
-		"    ps                 list running processes",
-		"    history            command history",
-		"    open <path>        launch application",
-		"    ssh [user@]h[:p]   open SSH tab",
-		"    telnet <h> [port]  open telnet tab",
-		"    wget [-n] <url>    HTTP/FTP download",
-		"    scp [-n] u@h:/p [l]  SCP download",
-		"    scp [-n] l u@h:/p    SCP upload",
-		"    ftp get u@h:/path    FTP download",
-		"    ftp put f u@h:/path  FTP upload",
-		"    ftp ls u@h:/path/    FTP directory list",
-		"    nc <host> <port>   raw TCP connection",
-		"    host <hostname>    DNS lookup",
-		"    ping <host> [port] TCP connect test",
-		"    ifconfig           show network config",
-		"    colors             display color test",
-		"    help               this message",
-		"    exit               close this tab",
-		"",
-		"  Paths: use / or : as separator, .. for parent",
-		"  Run apps by path: ./SimpleText or /Apps/SimpleText",
-		"  Tab completion works for commands and file names.",
-		"  Scroll: Shift+PgUp/PgDn (page), Cmd+Up/Down (line)"
+		"Paths: / lists the disks, /Macintosh HD/Documents, ~ is Documents on the",
+		"startup disk, cd - goes back. Tab completes names; Up/Down recall commands.",
 	};
 
-	(void)argc;
-	(void)argv;
+	if (argc >= 2)
+	{
+		if (!man_show(idx, argv[1]))
+			printf_s(idx, "help: no manual page for %s\r\n", argv[1]);
+		return;
+	}
 	shell_paged_write(idx, help_lines, sizeof(help_lines) / sizeof(help_lines[0]));
 }
 
@@ -11175,7 +11213,7 @@ static const char* shell_commands[] = {
 	"delete", "df", "dir", "dirname", "dos2unix", "echo", "entropy", "exit", "file",
 	"fixtype", "fold", "free", "ftp", "getinfo", "grep", "head", "help", "hexdump",
 	"history", "host", "hostname", "ifconfig", "info", "label", "less",
-	"ln", "ls", "mac2unix", "md", "md5sum", "mkdir", "more", "mv", "nc",
+	"ln", "ls", "mac2unix", "man", "md", "md5sum", "mkdir", "more", "mv", "nc",
 	"nl", "open", "ping", "ps", "pwd", "quit", "rd", "readlink",
 	"realpath", "ren", "rename", "rev", "rm", "rmdir", "rot13", "scp", "seq",
 	"setcreator", "settype", "sha1sum", "sha256sum", "sha512sum", "sleep",
@@ -11788,7 +11826,10 @@ static void shell_execute(int idx, char* line)
 
 	char* cmd = argv[0];
 
-	if      (strcmp(cmd, "ls") == 0)         cmd_ls(idx, argc, argv);
+	/* <command> --help shows the manual page */
+	if (argc == 2 && strcmp(argv[1], "--help") == 0 && man_show(idx, cmd))
+		;
+	else if (strcmp(cmd, "ls") == 0)         cmd_ls(idx, argc, argv);
 	else if (strcmp(cmd, "dir") == 0)        cmd_ls(idx, argc, argv);
 	else if (strcmp(cmd, "cd") == 0)         cmd_cd(idx, argc, argv);
 	else if (strcmp(cmd, "pwd") == 0)        cmd_pwd(idx, argc, argv);
@@ -11875,6 +11916,7 @@ static void shell_execute(int idx, char* line)
 	else if (strcmp(cmd, "wget") == 0)     cmd_wget(idx, argc, argv);
 	else if (strcmp(cmd, "scp") == 0)      cmd_scp(idx, argc, argv);
 	else if (strcmp(cmd, "ftp") == 0)      cmd_ftp(idx, argc, argv);
+	else if (strcmp(cmd, "man") == 0)        cmd_man(idx, argc, argv);
 	else if (strcmp(cmd, "help") == 0)       cmd_help(idx, argc, argv);
 	else if (strcmp(cmd, "?") == 0)          cmd_help(idx, argc, argv);
 	else if (strcmp(cmd, "exit") == 0 || strcmp(cmd, "quit") == 0)

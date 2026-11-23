@@ -6,7 +6,14 @@
 cmake_minimum_required(VERSION 3.9)
 
 project(MacShell)
-add_application(MacShell CREATOR "MShl" app.c console.c resources.r symbolfont.r net.c telnet.c debug.c shell.c macentropy.c)
+# Manual pages (man/*.txt) become TEXT resources for the man command
+file(GLOB MAN_PAGES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/man/*.txt)
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/man.r
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_man.py ${CMAKE_CURRENT_BINARY_DIR}/man.r ${MAN_PAGES}
+    DEPENDS ${MAN_PAGES} ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_man.py)
+
+add_application(MacShell CREATOR "MShl" app.c console.c resources.r symbolfont.r ${CMAKE_CURRENT_BINARY_DIR}/man.r net.c telnet.c debug.c shell.c macentropy.c)
 
 # MacShell's mbedTLS settings (applied on top of mbedTLS's defaults) and the
 # Open Transport switch for libssh2. Both libraries are built with 68020 code.

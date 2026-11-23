@@ -1,0 +1,9 @@
+NAME
+    exit, quit - close this tab
+
+SYNOPSIS
+    exit
+
+DESCRIPTION
+    Closes this tab; with the last tab of the last window, quits
+    MacShell.

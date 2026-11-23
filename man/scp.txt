@@ -1,0 +1,23 @@
+NAME
+    scp - copy files over SSH
+
+SYNOPSIS
+    scp [-n] user@host:/path [local]
+    scp [-n] <local> user@host:/path
+
+DESCRIPTION
+    Copies a file from or to another computer over an encrypted SSH
+    connection, logging in the same way as ssh. A Mac file with a
+    resource fork (such as an application) is sent as MacBinary with .bin
+    added to the name, so it arrives complete; a MacBinary file you
+    download is unpacked, and the .bin kept.
+
+OPTIONS
+    -n        don't show the progress line
+
+EXAMPLES
+    scp me@192.168.1.20:notes.txt
+    scp MacNTP me@192.168.1.20:/home/me/
+
+SEE ALSO
+    ssh, ftp

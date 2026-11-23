@@ -1,0 +1,12 @@
+NAME
+    readlink - show where an alias points
+
+SYNOPSIS
+    readlink <alias>
+
+DESCRIPTION
+    Prints the full path of the file or folder a Finder alias points
+    to.
+
+SEE ALSO
+    ln, realpath

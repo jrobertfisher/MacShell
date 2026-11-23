@@ -1,0 +1,23 @@
+NAME
+    grep - find lines containing text
+
+SYNOPSIS
+    grep [-ivnc] <text> <file>
+
+DESCRIPTION
+    Shows the lines of a file that contain text. text is matched
+    exactly as written (there are no regular expressions); quote it if it
+    contains spaces.
+
+OPTIONS
+    -i        ignore upper and lower case
+    -v        show the lines that don't contain text
+    -n        show line numbers
+    -c        only count the matching lines
+
+EXAMPLES
+    grep -n ssh notes.txt
+    grep -ic "error" log.txt
+
+SEE ALSO
+    wc, cat

@@ -1,0 +1,16 @@
+NAME
+    chown - set a file's type and creator
+
+SYNOPSIS
+    chown TYPE:CREATOR <file>
+
+DESCRIPTION
+    Sets a file's four-character type and creator codes together, which
+    decide its icon and which application opens it. Codes are case
+    sensitive; use quotes if one contains a space.
+
+EXAMPLES
+    chown TEXT:ttxt notes.txt     (a SimpleText document)
+
+SEE ALSO
+    settype, setcreator, fixtype, getinfo

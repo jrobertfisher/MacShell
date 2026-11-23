@@ -1,0 +1,11 @@
+NAME
+    nl - show a file with line numbers
+
+SYNOPSIS
+    nl <file>
+
+DESCRIPTION
+    Prints a file with each line numbered.
+
+SEE ALSO
+    cat, grep

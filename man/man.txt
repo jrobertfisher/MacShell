@@ -1,0 +1,22 @@
+NAME
+    man - show a command's manual page
+
+SYNOPSIS
+    man <command>
+    man -k <word>
+
+DESCRIPTION
+    Shows the manual page for a command: what it does, its options and
+    examples. Long pages pause at each screenful; press a key for more,
+    or q to stop. Typing <command> --help shows the same page.
+
+OPTIONS
+    -k <word>   list the pages whose name or summary contains word
+
+EXAMPLES
+    man ls
+    man -k file
+    ftp --help
+
+SEE ALSO
+    help, macshell

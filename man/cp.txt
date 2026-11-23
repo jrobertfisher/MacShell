@@ -1,0 +1,17 @@
+NAME
+    cp, copy - copy a file
+
+SYNOPSIS
+    cp <source> <dest>
+
+DESCRIPTION
+    Copies a file, including its resource fork, type and creator. dest
+    is the name of the new file (in another folder if you give a path);
+    an existing file of that name is replaced.
+
+EXAMPLES
+    cp notes.txt notes-old.txt
+    cp ~/notes.txt "/Macintosh HD/Desktop Folder/notes.txt"
+
+SEE ALSO
+    mv, rm

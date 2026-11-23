@@ -1,0 +1,12 @@
+NAME
+    hexdump - show a file in hexadecimal
+
+SYNOPSIS
+    hexdump <file>
+
+DESCRIPTION
+    Shows a file's bytes in hexadecimal with the printable characters
+    beside them, 16 bytes per line.
+
+SEE ALSO
+    xxd, strings

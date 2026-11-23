@@ -1,0 +1,28 @@
+NAME
+    ls, dir - list a folder's contents
+
+SYNOPSIS
+    ls [-l] [-a] [-G] [path ...]
+
+DESCRIPTION
+    Lists the files and folders in the current folder, or in each path
+    given. Folders are shown with a / after the name. ls / lists the
+    mounted disks. Paths may use wildcards: ls ~/*.txt
+
+OPTIONS
+    -l        long format: type and creator, size (both forks), date
+              modified and name; for disks, size and free space
+    -a        also show invisible files and names starting with a dot
+              (such as .ssh)
+    -G, --color
+              colour the names: folders blue, applications green, locked
+              files red, invisible files dim
+
+EXAMPLES
+    ls
+    ls -l ~/.ssh
+    ls /
+    ls -G "/Macintosh HD/System Folder" 
+
+SEE ALSO
+    cd, getinfo, macshell

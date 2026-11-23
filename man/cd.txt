@@ -1,0 +1,25 @@
+NAME
+    cd - change the current folder
+
+SYNOPSIS
+    cd [path]
+    cd -
+
+DESCRIPTION
+    Changes the current folder. With no path, goes home (~, Documents on
+    the startup disk). cd / goes to the list of disks; cd .. goes up one
+    level, and from the top of a disk to /. Following a Finder alias to a
+    folder works.
+
+OPTIONS
+    -         go back to the previous folder and print it; again to
+              return
+
+EXAMPLES
+    cd ~/.ssh
+    cd "/Macintosh HD/System Folder"
+    cd ..
+    cd -
+
+SEE ALSO
+    pwd, ls, macshell

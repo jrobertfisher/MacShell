@@ -1,0 +1,12 @@
+NAME
+    chmod - lock or unlock a file
+
+SYNOPSIS
+    chmod +w|-w <file>
+
+DESCRIPTION
+    +w unlocks a file so it can be changed; -w locks it, like the
+    Locked box in the Finder's Get Info.
+
+SEE ALSO
+    chattr, getinfo

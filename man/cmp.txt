@@ -1,0 +1,12 @@
+NAME
+    cmp - compare two files
+
+SYNOPSIS
+    cmp <file1> <file2>
+
+DESCRIPTION
+    Compares two files byte by byte and reports the first difference,
+    or nothing if they are the same.
+
+SEE ALSO
+    md5sum, sha256sum

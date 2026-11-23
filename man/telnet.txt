@@ -1,0 +1,12 @@
+NAME
+    telnet - connect with Telnet
+
+SYNOPSIS
+    telnet <host> [port]
+
+DESCRIPTION
+    Opens a Telnet session (port 23 unless given) in a new tab. Telnet
+    isn't encrypted; use ssh where you can.
+
+SEE ALSO
+    ssh, nc

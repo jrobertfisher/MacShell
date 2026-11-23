@@ -1,0 +1,15 @@
+NAME
+    df - show disk space
+
+SYNOPSIS
+    df [-m|-h]
+
+DESCRIPTION
+    Lists the mounted disks with their size, used and free space.
+
+OPTIONS
+    -m        sizes in megabytes
+    -h        sizes in the most readable unit (K, M or G)
+
+SEE ALSO
+    free, ls

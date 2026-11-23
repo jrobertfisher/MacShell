@@ -1,0 +1,16 @@
+NAME
+    mv, ren, rename - rename a file or folder
+
+SYNOPSIS
+    mv <name> <new name>
+
+DESCRIPTION
+    Renames a file or folder within its folder. It doesn't move items
+    between folders; use cp and rm for that. Fails if new name already
+    exists.
+
+EXAMPLES
+    mv notes.txt notes-2026.txt
+
+SEE ALSO
+    cp, rm

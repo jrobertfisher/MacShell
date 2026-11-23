@@ -1,0 +1,16 @@
+NAME
+    getinfo, info, file - show everything about a file
+
+SYNOPSIS
+    getinfo <file|folder>
+
+DESCRIPTION
+    Shows a file's details, like the Finder's Get Info window: name,
+    kind, type and creator, data and resource fork sizes, dates, Finder
+    flags, label and lock state.
+
+EXAMPLES
+    getinfo MacShell
+
+SEE ALSO
+    ls, settype, chattr

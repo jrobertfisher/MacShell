@@ -1,0 +1,14 @@
+NAME
+    help - list MacShell's commands
+
+SYNOPSIS
+    help
+    help <command>
+
+DESCRIPTION
+    On its own, help lists MacShell's commands by group with a short
+    description of each. help <command> shows that command's manual page,
+    like man <command>.
+
+SEE ALSO
+    man, macshell

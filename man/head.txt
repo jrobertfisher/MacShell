@@ -1,0 +1,16 @@
+NAME
+    head - show the start of a file
+
+SYNOPSIS
+    head [-n N] <file>
+    head -N <file>
+
+DESCRIPTION
+    Shows the first 10 lines of a file, or the first N.
+
+EXAMPLES
+    head -n 20 notes.txt
+    head -5 notes.txt
+
+SEE ALSO
+    tail, cat

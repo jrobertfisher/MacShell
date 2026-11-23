@@ -1,0 +1,14 @@
+NAME
+    md5sum - MD5 checksum of a file
+
+SYNOPSIS
+    md5sum <file>
+
+DESCRIPTION
+    Prints the MD5 checksum of a file's data fork, in the same format as
+    md5sum on Linux, to check a download against a published value.
+    MD5 and SHA-1 are fine for spotting damage but not for security;
+    use sha256sum for that.
+
+SEE ALSO
+    sha256sum, crc32, cmp

@@ -1,0 +1,14 @@
+NAME
+    settype - set a file's type code
+
+SYNOPSIS
+    settype TYPE <file>
+
+DESCRIPTION
+    Sets a file's four-character type code.
+
+EXAMPLES
+    settype TEXT readme
+
+SEE ALSO
+    chown, setcreator, fixtype

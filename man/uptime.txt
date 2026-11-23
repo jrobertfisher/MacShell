@@ -1,0 +1,11 @@
+NAME
+    uptime - time since the Mac started
+
+SYNOPSIS
+    uptime
+
+DESCRIPTION
+    Shows how long the Mac has been running.
+
+SEE ALSO
+    date

@@ -1,0 +1,11 @@
+NAME
+    which - check an application path
+
+SYNOPSIS
+    which <path>
+
+DESCRIPTION
+    Prints the full path of an application, if path is one.
+
+SEE ALSO
+    open, realpath

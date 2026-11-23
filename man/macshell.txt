@@ -1,0 +1,49 @@
+NAME
+    macshell - about MacShell: paths, redirection, keys
+
+SYNOPSIS
+    man macshell
+
+DESCRIPTION
+    MacShell is an SSH client and Unix-style shell for classic Mac OS.
+
+    Paths
+      /               the list of mounted disks
+      /Macintosh HD   the top of the disk "Macintosh HD"
+      ~               Documents on the startup disk (created if missing);
+                      MacShell starts here
+      . and ..        this folder and the one above; .. at the top of a
+                      disk goes to /
+    Quote names with spaces ("System Folder") or use a backslash
+    (System\ Folder). A '/' inside a Mac file name is shown and typed as
+    ':'. Old Mac paths like Macintosh HD:Documents:notes also work.
+
+    Wildcards
+      * matches any characters and ? one character, in the last part of
+      a path, for ls, rm and some other commands: ls ~/*.txt
+
+    Output to a file
+      command > file    write the output to file (replacing it)
+      command >> file   add the output to the end of file
+    There are no pipes (|).
+
+    Running applications
+      Type an application's path to open it: ./SimpleText or
+      "/Macintosh HD/Applications/SimpleText". See open.
+
+    Keys
+      Tab               complete a command or file name
+      Up, Down          previous and next command in the history
+      Ctrl+C            cancel the current line or command
+      Ctrl+D            close this tab (on an empty line)
+      Shift+Page Up/Dn  scroll back through earlier output
+      Cmd+T, Cmd+N      new tab, new window; Cmd+1 to Cmd+8 switch tabs
+
+    Getting help
+      help              list of commands
+      man <command>     the manual page for a command
+      <command> --help  the same page
+      man -k <word>     search the summaries of all pages
+
+SEE ALSO
+    help, man, cd, ls, open

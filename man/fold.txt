@@ -1,0 +1,15 @@
+NAME
+    fold - wrap long lines
+
+SYNOPSIS
+    fold [-w N] <file>
+
+DESCRIPTION
+    Prints a file with lines longer than N characters (default 80)
+    wrapped onto the next line.
+
+OPTIONS
+    -w N      wrap at N characters
+
+SEE ALSO
+    cat

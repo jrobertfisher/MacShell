@@ -1,0 +1,11 @@
+NAME
+    uname - show the system
+
+SYNOPSIS
+    uname
+
+DESCRIPTION
+    Shows the Mac OS version and the processor.
+
+SEE ALSO
+    hostname, free

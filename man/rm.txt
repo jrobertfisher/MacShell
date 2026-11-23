@@ -1,0 +1,19 @@
+NAME
+    rm, del, delete - delete files
+
+SYNOPSIS
+    rm [-i] <file ...>
+
+DESCRIPTION
+    Deletes files. Wildcards work: rm *.tmp. Deleted files don't go to
+    the Trash and can't be recovered. Folders are removed with rmdir.
+
+OPTIONS
+    -i        ask before deleting each file
+
+EXAMPLES
+    rm old.txt
+    rm -i *.bak
+
+SEE ALSO
+    rmdir, mv

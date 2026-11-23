@@ -1,0 +1,9 @@
+NAME
+    rot13 - ROT13 encode or decode
+
+SYNOPSIS
+    rot13 <file>
+
+DESCRIPTION
+    Prints a file with each letter moved 13 places in the alphabet.
+    Running it twice gives back the original.

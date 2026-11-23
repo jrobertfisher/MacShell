@@ -31,6 +31,9 @@ Features
   * System: `ps`, `free`, `df`, `uname`, `uptime`, `date`, `cal`, `hostname`, `ifconfig`, `entropy`
   * Mac-specific: `getinfo`, `settype`, `setcreator`, `fixtype`, `chattr`, `chmod`, `chown`, `label`, `open`
   * Network: `ssh`, `telnet`, `nc`, `ping`, `host`, `ftp`, `scp`, `wget`, `curl`
+* **Help**: `help` lists the commands; `man <command>` (or `<command> --help`) shows a manual
+  page for each, `man macshell` explains paths and keys, and `man -k <word>` searches. The pages
+  are plain text in `man/`, built into the application.
 * **Windows and tabs**: Cmd+N opens a window; Cmd+T opens a shell tab, Cmd+S an SSH tab.
 * **Terminal**: xterm-256color with 256 colours and true colour, bold, italic, underline, reverse
   video, a symbol font for box drawing, 100 lines of scrollback per tab, copy and paste.

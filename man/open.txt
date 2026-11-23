@@ -1,0 +1,15 @@
+NAME
+    open - open an application
+
+SYNOPSIS
+    open <application>
+
+DESCRIPTION
+    Starts an application. Typing an application's path, such as
+    ./SimpleText, does the same.
+
+EXAMPLES
+    open "/Macintosh HD/Applications/SimpleText"
+
+SEE ALSO
+    which, ps

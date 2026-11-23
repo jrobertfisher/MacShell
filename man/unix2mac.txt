@@ -1,0 +1,12 @@
+NAME
+    unix2mac - convert Unix line endings to Mac
+
+SYNOPSIS
+    unix2mac <file>
+
+DESCRIPTION
+    Changes a file's Unix line endings (LF) to classic Mac ones (CR), in
+    place, so SimpleText shows the lines properly.
+
+SEE ALSO
+    mac2unix, unix2dos

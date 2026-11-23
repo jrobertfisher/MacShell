@@ -1,0 +1,27 @@
+NAME
+    curl - show or download a web page
+
+SYNOPSIS
+    curl [-o file] [-O] [-I] [-L] <url>
+
+DESCRIPTION
+    Shows an http or https page on the screen. If the data turns out to
+    be binary, it stops and suggests -o, so the window doesn't fill with
+    garbage. Like the real curl, it doesn't follow redirects unless asked
+    (-L), and it shows the server's error page when there is one.
+
+    HTTPS certificates can't be checked; see wget.
+
+OPTIONS
+    -o file   save to file instead
+    -O        save with the name from the URL
+    -I        show only the response headers
+    -L        follow redirects
+
+EXAMPLES
+    curl http://example.com/
+    curl -I https://example.com/
+    curl -L -o page.html http://example.com/
+
+SEE ALSO
+    wget

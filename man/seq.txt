@@ -1,0 +1,18 @@
+NAME
+    seq - print a sequence of numbers
+
+SYNOPSIS
+    seq <last>
+    seq <first> <last>
+    seq <first> <step> <last>
+
+DESCRIPTION
+    Prints numbers from first (default 1) to last, adding step (default
+    1) each time.
+
+EXAMPLES
+    seq 5
+    seq 0 10 100
+
+SEE ALSO
+    echo

@@ -1,0 +1,12 @@
+NAME
+    basename - the last part of a path
+
+SYNOPSIS
+    basename <path>
+
+DESCRIPTION
+    Prints the last part of a path: basename /Disk/Folder/file.txt
+    prints file.txt.
+
+SEE ALSO
+    dirname, realpath

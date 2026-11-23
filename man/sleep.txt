@@ -1,0 +1,8 @@
+NAME
+    sleep - wait
+
+SYNOPSIS
+    sleep <seconds>
+
+DESCRIPTION
+    Waits for the given number of whole seconds.

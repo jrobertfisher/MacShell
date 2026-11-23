@@ -1,0 +1,13 @@
+NAME
+    colors - show the terminal's colours
+
+SYNOPSIS
+    colors
+
+DESCRIPTION
+    Shows the 16 standard colours (as backgrounds and as text) and their
+    values in the current colour scheme, to check how coloured output
+    will look.
+
+SEE ALSO
+    macshell

@@ -1,0 +1,12 @@
+NAME
+    pwd - show the current folder's path
+
+SYNOPSIS
+    pwd
+
+DESCRIPTION
+    Prints the full path of the current folder, such as
+    /Macintosh HD/Documents, or / for the list of disks.
+
+SEE ALSO
+    cd, realpath

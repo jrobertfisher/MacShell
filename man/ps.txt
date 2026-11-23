@@ -1,0 +1,12 @@
+NAME
+    ps - list running applications
+
+SYNOPSIS
+    ps
+
+DESCRIPTION
+    Lists the running applications and other processes, with their
+    creator codes and memory sizes.
+
+SEE ALSO
+    free, open

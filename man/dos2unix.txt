@@ -1,0 +1,12 @@
+NAME
+    dos2unix - convert CRLF line endings to LF
+
+SYNOPSIS
+    dos2unix <file>
+
+DESCRIPTION
+    Changes a file's Windows/DOS line endings (CR LF) to Unix ones (LF),
+    in place.
+
+SEE ALSO
+    unix2dos, mac2unix, unix2mac

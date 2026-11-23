@@ -1,0 +1,15 @@
+NAME
+    setcreator - set a file's creator code
+
+SYNOPSIS
+    setcreator CREATOR <file>
+
+DESCRIPTION
+    Sets a file's four-character creator code (the application that
+    opens it).
+
+EXAMPLES
+    setcreator ttxt readme
+
+SEE ALSO
+    chown, settype, fixtype
