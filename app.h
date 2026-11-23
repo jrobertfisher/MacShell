@@ -143,6 +143,9 @@ struct session
 	int ftp_active;              /* 1 = active mode (PORT), 0 = passive (PASV) */
 	enum FTP_MODE ftp_mode;      /* interactive session state */
 	EndpointRef ftp_ctrl_ep;     /* open control connection (interactive) */
+	EndpointRef ftp_rbuf_ep;     /* control connection that ftp_rbuf belongs to */
+	char ftp_rbuf[512];          /* reply bytes received but not yet used */
+	int ftp_rpos;
 	char ftp_cmdline[256];       /* command for the ftp worker thread */
 	int hide_input;              /* typing a password: no echo, no history */
 	char ftp_user[256];

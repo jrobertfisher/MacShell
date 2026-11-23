@@ -6631,6 +6631,13 @@ static EndpointRef ftp_tcp_connect(int idx, const char* host,
 /* close and invalidate a TCP endpoint */
 static void ftp_tcp_close(EndpointRef ep)
 {
+	int i;
+	for (i = 0; i < MAX_SESSIONS; i++)
+		if (sessions[i].ftp_rbuf_ep == ep)
+		{
+			sessions[i].ftp_rbuf_ep = kOTInvalidEndpointRef;
+			sessions[i].ftp_rpos = 0;
+		}
 	if (ep != kOTInvalidEndpointRef)
 	{
 		OTSndOrderlyDisconnect(ep);
@@ -6722,12 +6729,21 @@ static int ftp_command(int idx, EndpointRef ctrl_ep,
                        const char* cmd,
                        char* resp_buf, int resp_buf_size)
 {
-	char line_buf[512];
-	int line_pos = 0;
+	/* Reply bytes are kept in the session between calls: a server often sends
+	   two replies in one packet (e.g. "150 ..." and "226 ..." for a short
+	   listing), and the second one must not be lost. */
+	struct session* s = &sessions[idx];
+	char* line_buf = s->ftp_rbuf;
+	int* line_pos_p = &s->ftp_rpos;
 	int first_code = -1;
 	int resp_total = 0;
 
 	resp_buf[0] = '\0';
+	if (s->ftp_rbuf_ep != ctrl_ep)
+	{
+		s->ftp_rbuf_ep = ctrl_ep;
+		s->ftp_rpos = 0;
+	}
 
 	/* send command */
 	if (cmd != NULL)
@@ -6739,16 +6755,19 @@ static int ftp_command(int idx, EndpointRef ctrl_ep,
 	}
 
 	/* read response lines */
-	line_pos = 0;
 	while (1)
 	{
 		int line_len;
 		int code;
 		char* line_start;
+		char code_head[4];
 
-		line_len = ftp_recv_line(idx, ctrl_ep, line_buf, sizeof(line_buf), &line_pos);
+		line_len = ftp_recv_line(idx, ctrl_ep, line_buf, sizeof(s->ftp_rbuf), line_pos_p);
 		if (line_len < 0)
+		{
+			*line_pos_p = 0;
 			return -1;
+		}
 
 		/* copy to response buffer (best-effort; overflow is OK) */
 		if (resp_total + line_len < resp_buf_size - 1)
@@ -6758,8 +6777,15 @@ static int ftp_command(int idx, EndpointRef ctrl_ep,
 			resp_buf[resp_total] = '\0';
 		}
 
-		/* parse 3-digit code from line_buf BEFORE shifting it */
-		line_start = line_buf;
+		/* take a copy of the first 4 bytes, then remove the line from the buffer */
+		{
+			char head[4] = { 0, 0, 0, 0 };
+			memcpy(head, line_buf, line_len < 4 ? line_len : 4);
+			memmove(line_buf, line_buf + line_len, *line_pos_p - line_len);
+			*line_pos_p -= line_len;
+			memcpy(code_head, head, 4);
+		}
+		line_start = code_head;
 		if (line_len >= 4 && line_start[0] >= '1' && line_start[0] <= '5' &&
 		    line_start[1] >= '0' && line_start[1] <= '9' &&
 		    line_start[2] >= '0' && line_start[2] <= '9')
@@ -6789,16 +6815,6 @@ static int ftp_command(int idx, EndpointRef ctrl_ep,
 		}
 		/* else: text-only continuation line in multiline, keep reading */
 
-		/* shift remaining data in line_buf for next recv */
-		if (line_len < line_pos)
-		{
-			memmove(line_buf, line_buf + line_len, line_pos - line_len);
-			line_pos -= line_len;
-		}
-		else
-		{
-			line_pos = 0;
-		}
 	}
 }
 
