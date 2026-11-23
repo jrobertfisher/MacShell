@@ -148,6 +148,10 @@ struct session
 	int ftp_rpos;
 	char ftp_cmdline[256];       /* command for the ftp worker thread */
 	int hide_input;              /* typing a password: no echo, no history */
+	int keygen_stage;            /* ssh-keygen: 1 = ask passphrase, 2 = confirm */
+	char keygen_pass[128];
+	char keygen_name[32];
+	char keygen_comment[64];
 	char ftp_user[256];
 	char ftp_password[256];
 	unsigned short ftp_port;          /* default 21 */

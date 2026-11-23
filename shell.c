@@ -8336,6 +8336,309 @@ static void ftp_interactive_open(int idx, const char* spec, int active)
 }
 
 /* ------------------------------------------------------------------ */
+/* ssh-keygen: make an ECDSA P-256 key pair on the Mac                */
+/* ------------------------------------------------------------------ */
+
+#include <mbedtls/pk.h>
+#include <mbedtls/ecp.h>
+#include <mbedtls/aes.h>
+#include <mbedtls/base64.h>
+#include <mbedtls/platform_util.h>
+
+static int keygen_file_exists(int idx, const char* name)
+{
+	struct session* s = &sessions[idx];
+	Str255 pn;
+	FSSpec tmp;
+	int n = strlen(name);
+	pn[0] = n;
+	memcpy(pn + 1, name, n);
+	return FSMakeFSSpec(s->shell_vRefNum, s->shell_dirID, pn, &tmp) != fnfErr;
+}
+
+static int keygen_write_file(int idx, const char* name, const unsigned char* data, long len)
+{
+	struct session* s = &sessions[idx];
+	Str255 pn;
+	FSSpec spec;
+	short ref;
+	long count = len;
+	OSErr err;
+	int n = strlen(name);
+
+	pn[0] = n;
+	memcpy(pn + 1, name, n);
+	if (HCreate(s->shell_vRefNum, s->shell_dirID, pn, 'ttxt', 'TEXT') != noErr)
+		return 0;
+	FSMakeFSSpec(s->shell_vRefNum, s->shell_dirID, pn, &spec);
+	if (FSpOpenDF(&spec, fsRdWrPerm, &ref) != noErr)
+		return 0;
+	err = FSWrite(ref, &count, data);
+	FSClose(ref);
+	return err == noErr && count == len;
+}
+
+static void put_u32(unsigned char* p, unsigned long v)
+{
+	p[0] = (unsigned char)(v >> 24); p[1] = (unsigned char)(v >> 16);
+	p[2] = (unsigned char)(v >> 8);  p[3] = (unsigned char)v;
+}
+
+/* PEM body: base64 in 64-character lines */
+static long pem_lines(unsigned char* out, long out_size, const unsigned char* der, long der_len)
+{
+	unsigned char b64[2048];
+	size_t b64_len, i;
+	long o = 0;
+	if (mbedtls_base64_encode(b64, sizeof b64, &b64_len, der, der_len) != 0)
+		return -1;
+	for (i = 0; i < b64_len; i += 64)
+	{
+		size_t n = b64_len - i < 64 ? b64_len - i : 64;
+		if (o + (long)n + 1 >= out_size) return -1;
+		memcpy(out + o, b64 + i, n);
+		o += n;
+		out[o++] = '\n';
+	}
+	return o;
+}
+
+static void keygen_run(int idx)
+{
+	struct session* s = &sessions[idx];
+	mbedtls_entropy_context entropy;
+	mbedtls_ctr_drbg_context drbg;
+	mbedtls_pk_context pk;
+	unsigned char der[256], blob[128], priv[1024], pub[512], hash[32], fp[64];
+	unsigned char point[65];
+	size_t point_len, fp_len, b64_len;
+	long der_len, priv_len = 0, pub_len, blob_len;
+	char pub_name[40];
+	int ret;
+
+	snprintf(pub_name, sizeof pub_name, "%s.pub", s->keygen_name);
+
+	mbedtls_entropy_init(&entropy);
+	mbedtls_ctr_drbg_init(&drbg);
+	mbedtls_pk_init(&pk);
+
+	vt_write(idx, "Generating ECDSA P-256 key pair... ");
+	ret = mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy,
+	                            (const unsigned char*)"MacShell ssh-keygen", 19);
+	if (ret == 0) ret = mbedtls_pk_setup(&pk, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY));
+	if (ret == 0) ret = mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, mbedtls_pk_ec(pk),
+	                                        mbedtls_ctr_drbg_random, &drbg);
+	if (ret != 0)
+	{
+		printf_s(idx, "failed (%d)\r\n", ret);
+		goto done;
+	}
+	vt_write(idx, "done.\r\n");
+
+	/* private key: SEC1 DER, written at the end of der[] */
+	ret = mbedtls_pk_write_key_der(&pk, der, sizeof der);
+	if (ret <= 0) { vt_write(idx, "ssh-keygen: cannot encode the key\r\n"); goto done; }
+	der_len = ret;
+	memmove(der, der + sizeof der - der_len, der_len);
+
+	if (s->keygen_pass[0] == '\0')
+	{
+		const char* head = "-----BEGIN EC PRIVATE KEY-----\n";
+		long n;
+		priv_len = strlen(head);
+		memcpy(priv, head, priv_len);
+		n = pem_lines(priv + priv_len, sizeof priv - priv_len - 40, der, der_len);
+		if (n < 0) goto encode_fail;
+		priv_len += n;
+	}
+	else
+	{
+		/* Traditional encrypted PEM (as written by OpenSSL and read by OpenSSH,
+		   mbedTLS and libssh2): AES-128-CBC, key = MD5(passphrase || IV[0..7]). */
+		unsigned char iv[16], iv_work[16], key[16], enc[272];
+		mbedtls_md5_context md5;
+		mbedtls_aes_context aes;
+		long pad = 16 - (der_len % 16), i;
+		char hdr[160];
+		long n;
+
+		mbedtls_ctr_drbg_random(&drbg, iv, sizeof iv);
+		mbedtls_md5_init(&md5);
+		mbedtls_md5_starts(&md5);
+		mbedtls_md5_update(&md5, (const unsigned char*)s->keygen_pass, strlen(s->keygen_pass));
+		mbedtls_md5_update(&md5, iv, 8);
+		mbedtls_md5_finish(&md5, key);
+		mbedtls_md5_free(&md5);
+
+		memcpy(enc, der, der_len);
+		for (i = 0; i < pad; i++) enc[der_len + i] = (unsigned char)pad;
+		memcpy(iv_work, iv, 16);
+		mbedtls_aes_init(&aes);
+		mbedtls_aes_setkey_enc(&aes, key, 128);
+		mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, der_len + pad, iv_work, enc, enc);
+		mbedtls_aes_free(&aes);
+		mbedtls_platform_zeroize(key, sizeof key);
+
+		n = snprintf(hdr, sizeof hdr,
+		             "-----BEGIN EC PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,");
+		for (i = 0; i < 16; i++) n += snprintf(hdr + n, sizeof hdr - n, "%02X", iv[i]);
+		n += snprintf(hdr + n, sizeof hdr - n, "\n\n");
+		memcpy(priv, hdr, n);
+		priv_len = n;
+		n = pem_lines(priv + priv_len, sizeof priv - priv_len - 40, enc, der_len + pad);
+		mbedtls_platform_zeroize(enc, sizeof enc);
+		if (n < 0) goto encode_fail;
+		priv_len += n;
+	}
+	memcpy(priv + priv_len, "-----END EC PRIVATE KEY-----\n", 29);
+	priv_len += 29;
+
+	/* public key: "ecdsa-sha2-nistp256 <base64 blob> <comment>" */
+	if (mbedtls_ecp_write_public_key(mbedtls_pk_ec(pk), MBEDTLS_ECP_PF_UNCOMPRESSED,
+	                                 &point_len, point, sizeof point) != 0 || point_len != 65)
+		goto encode_fail;
+	blob_len = 0;
+	put_u32(blob + blob_len, 19); memcpy(blob + blob_len + 4, "ecdsa-sha2-nistp256", 19); blob_len += 23;
+	put_u32(blob + blob_len, 8);  memcpy(blob + blob_len + 4, "nistp256", 8);             blob_len += 12;
+	put_u32(blob + blob_len, 65); memcpy(blob + blob_len + 4, point, 65);                 blob_len += 69;
+
+	pub_len = snprintf((char*)pub, sizeof pub, "ecdsa-sha2-nistp256 ");
+	if (mbedtls_base64_encode(pub + pub_len, sizeof pub - pub_len, &b64_len, blob, blob_len) != 0)
+		goto encode_fail;
+	pub_len += b64_len;
+	pub_len += snprintf((char*)pub + pub_len, sizeof pub - pub_len, " %s\n", s->keygen_comment);
+
+	/* write the private key first; never overwrite */
+	if (keygen_file_exists(idx, s->keygen_name) || keygen_file_exists(idx, pub_name))
+	{
+		printf_s(idx, "ssh-keygen: %s already exists; nothing written\r\n", s->keygen_name);
+		goto done;
+	}
+	if (!keygen_write_file(idx, s->keygen_name, priv, priv_len) ||
+	    !keygen_write_file(idx, pub_name, pub, pub_len))
+	{
+		vt_write(idx, "ssh-keygen: cannot write the key files\r\n");
+		goto done;
+	}
+
+	/* fingerprint, as ssh-keygen -l shows it */
+	mbedtls_sha256(blob, blob_len, hash, 0);
+	mbedtls_base64_encode(fp, sizeof fp, &fp_len, hash, 32);
+	while (fp_len > 0 && fp[fp_len - 1] == '=') fp_len--;
+	fp[fp_len] = '\0';
+
+	printf_s(idx, "Private key saved to %s%s\r\n", s->keygen_name,
+	         s->keygen_pass[0] ? " (encrypted with your passphrase)" : " (no passphrase)");
+	printf_s(idx, "Public key saved to %s\r\n", pub_name);
+	printf_s(idx, "Fingerprint: SHA256:%s %s\r\n\r\n", fp, s->keygen_comment);
+	vt_write(idx, "Add this line to ~/.ssh/authorized_keys on the server:\r\n");
+	pub[pub_len - 1] = '\0';
+	vt_write(idx, (char*)pub);
+	vt_write(idx, "\r\n");
+	goto done;
+
+encode_fail:
+	vt_write(idx, "ssh-keygen: cannot encode the key\r\n");
+done:
+	mbedtls_platform_zeroize(der, sizeof der);
+	mbedtls_platform_zeroize(priv, sizeof priv);
+	mbedtls_platform_zeroize(s->keygen_pass, sizeof s->keygen_pass);
+	mbedtls_pk_free(&pk);
+	mbedtls_ctr_drbg_free(&drbg);
+	mbedtls_entropy_free(&entropy);
+	s->keygen_stage = 0;
+}
+
+/* a hidden line typed at a passphrase prompt */
+static void keygen_line(int idx, char* line)
+{
+	struct session* s = &sessions[idx];
+
+	if (s->keygen_stage == 1)
+	{
+		copy_cstr_trunc(s->keygen_pass, sizeof s->keygen_pass, line);
+		mbedtls_platform_zeroize(line, strlen(line));
+		s->keygen_stage = 2;
+		s->hide_input = 1;
+		return;
+	}
+	if (strcmp(line, s->keygen_pass) != 0)
+	{
+		mbedtls_platform_zeroize(line, strlen(line));
+		mbedtls_platform_zeroize(s->keygen_pass, sizeof s->keygen_pass);
+		vt_write(idx, "Passphrases do not match. Try again.\r\n");
+		s->keygen_stage = 1;
+		s->hide_input = 1;
+		return;
+	}
+	mbedtls_platform_zeroize(line, strlen(line));
+	keygen_run(idx);
+}
+
+/* ssh-keygen [-f name] [-C comment] */
+static void cmd_ssh_keygen(int idx, int argc, char* argv[])
+{
+	struct session* s = &sessions[idx];
+	const char* name = "id_ecdsa";
+	const char* comment = "MacShell";
+	int i;
+
+	for (i = 1; i < argc; i++)
+	{
+		if (!strcmp(argv[i], "-f") && i + 1 < argc) name = argv[++i];
+		else if (!strcmp(argv[i], "-C") && i + 1 < argc) comment = argv[++i];
+		else if (!strcmp(argv[i], "-t") && i + 1 < argc)
+		{
+			if (strcmp(argv[++i], "ecdsa") != 0)
+			{
+				vt_write(idx, "ssh-keygen: only ecdsa (P-256) keys; ed25519 isn't supported by MacShell's SSH library\r\n");
+				return;
+			}
+		}
+		else if (!strcmp(argv[i], "-b") && i + 1 < argc)
+		{
+			if (strcmp(argv[++i], "256") != 0)
+			{
+				vt_write(idx, "ssh-keygen: only 256-bit ECDSA keys\r\n");
+				return;
+			}
+		}
+		else
+		{
+			vt_write(idx, "usage: ssh-keygen [-f name] [-C comment]\r\n"
+			              "  makes an ECDSA P-256 key pair: name (private) and name.pub (public)\r\n");
+			return;
+		}
+	}
+	if (strlen(name) > 27 || strchr(name, ':'))
+	{
+		vt_write(idx, "ssh-keygen: the name must be 27 characters or fewer, without ':'\r\n");
+		return;
+	}
+	if (!macentropy_get_stats()->ready)
+	{
+		vt_write(idx, "ssh-keygen: not enough randomness yet; type 'entropy' for details\r\n");
+		return;
+	}
+	copy_cstr_trunc(s->keygen_name, sizeof s->keygen_name, name);
+	copy_cstr_trunc(s->keygen_comment, sizeof s->keygen_comment, comment);
+	{
+		char pub_name[40];
+		snprintf(pub_name, sizeof pub_name, "%s.pub", name);
+		if (keygen_file_exists(idx, name) || keygen_file_exists(idx, pub_name))
+		{
+			printf_s(idx, "ssh-keygen: %s or %s already exists; use -f to choose another name\r\n",
+			         name, pub_name);
+			return;
+		}
+	}
+	printf_s(idx, "Making a key pair in this folder: %s and %s.pub\r\n", name, name);
+	memset(s->keygen_pass, 0, sizeof s->keygen_pass);
+	s->keygen_stage = 1;
+	s->hide_input = 1;
+}
+
+/* ------------------------------------------------------------------ */
 /* ftp command entry point                                            */
 /* ------------------------------------------------------------------ */
 
@@ -10252,7 +10555,7 @@ static const char* shell_commands[] = {
 	"nl", "open", "ping", "ps", "pwd", "quit", "rd", "readlink",
 	"realpath", "ren", "rename", "rev", "rm", "rmdir", "rot13", "scp", "seq",
 	"setcreator", "settype", "sha1sum", "sha256sum", "sha512sum", "sleep",
-	"ssh", "strings", "tail", "telnet", "touch", "type", "uname",
+	"ssh", "ssh-keygen", "strings", "tail", "telnet", "touch", "type", "uname",
 	"unix2dos", "unix2mac", "uptime", "wc", "wget", "which", "xxd"
 };
 #define NUM_SHELL_COMMANDS (sizeof(shell_commands) / sizeof(shell_commands[0]))
@@ -10792,12 +11095,18 @@ static void redir_close(int idx)
 }
 
 static void ftp_interactive_line(int idx, char* line);
+static void keygen_line(int idx, char* line);
 
 static void shell_execute(int idx, char* line)
 {
 	if (sessions[idx].ftp_mode != FTP_MODE_OFF)
 	{
 		ftp_interactive_line(idx, line);
+		return;
+	}
+	if (sessions[idx].keygen_stage != 0)
+	{
+		keygen_line(idx, line);
 		return;
 	}
 	char line_copy[256];
@@ -10880,6 +11189,7 @@ static void shell_execute(int idx, char* line)
 	else if (strcmp(cmd, "date") == 0)       cmd_date(idx, argc, argv);
 	else if (strcmp(cmd, "uname") == 0)      cmd_uname(idx, argc, argv);
 	else if (strcmp(cmd, "curl") == 0)       cmd_wget(idx, argc, argv);
+	else if (strcmp(cmd, "ssh-keygen") == 0) cmd_ssh_keygen(idx, argc, argv);
 	else if (strcmp(cmd, "entropy") == 0)    cmd_entropy(idx, argc, argv);
 	else if (strcmp(cmd, "free") == 0)       cmd_free(idx, argc, argv);
 	else if (strcmp(cmd, "ps") == 0)         cmd_ps(idx, argc, argv);
@@ -10979,6 +11289,9 @@ void shell_prompt(int idx)
 	char dirname[64];
 	char esc[20];
 	int c = prefs.prompt_color;
+
+	if (s->keygen_stage == 1) { vt_write(idx, "Enter passphrase (empty for no passphrase): "); return; }
+	if (s->keygen_stage == 2) { vt_write(idx, "Enter same passphrase again: "); return; }
 
 	switch (s->ftp_mode)
 	{
@@ -11226,6 +11539,8 @@ void shell_input(int session_idx, unsigned char c, int modifiers, unsigned char 
 			s->shell_cursor_pos = 0;
 			s->hide_input = 0;
 			s->ftp_mode = FTP_MODE_OFF;
+			s->keygen_stage = 0;
+			memset(s->keygen_pass, 0, sizeof(s->keygen_pass));
 			vt_write(session_idx, "^C\r\n");
 			shell_prompt(session_idx);
 		}
