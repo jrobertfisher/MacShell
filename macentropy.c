@@ -1,16 +1,22 @@
 /*
  * MacShell entropy. See macentropy.h for the overview.
  *
+ * Credit comes from the seed file and from the user's mouse and
+ * keystrokes. The sound input and the clock jitter are sampled and mixed
+ * into the pool too, and health-tested, but not credited: an idle sound
+ * input can carry mains hum, a slow periodic signal (about 184 samples per
+ * cycle for 60 Hz at this sampling rate), which simple per-sample tests
+ * can't tell from noise. The health-test results still show in the entropy
+ * command, so a stuck or silent input is reported.
+ *
  * Estimation follows the spirit of NIST SP 800-90B:
  *   - repetition count test: a value repeated too many times in a row fails
  *   - adaptive proportion test: one value too common in a 512-sample window fails
  *   - min-entropy estimate (99% upper bound) from the worse of:
  *       most common value: how often the commonest value appears
  *       prediction: how often a sample equals the one 1..32 steps back
- *         (periodic signals, mains hum) or continues the last step (counters)
- * Each source is credited only a quarter of that estimate, and at most 256
- * bits. Tested against silence, stuck/periodic patterns, counters, hum and
- * noise (patterns get 0 bits; noise is credited below its true entropy).
+ *         (short-period signals only) or continues the last step (counters)
+ * It returns 0 for silence, stuck values, counters and ramps.
  */
 #include "macentropy.h"
 
@@ -207,11 +213,12 @@ static void gather_sound(void)
             long bits;
             /* keep the raw samples in the pool regardless; credit only if healthy */
             mbedtls_sha256_update(&g_ctx, (const unsigned char *)buf, (size_t)n);
+            /* health verdict only: the samples are already in the pool
+               above, but they are credited 0 bits (see the file header). */
             bits = assess((const unsigned char *)buf, n);
-            if (bits > 0) {
+            if (bits > 0)
                 g_stats.sound_passed = 1;
-                g_stats.sound_bits = bits > 256 ? 256 : bits;
-            }
+            g_stats.sound_bits = 0;
         }
     }
     /* wipe the samples: they are noise, but there is no reason to keep them */
@@ -236,11 +243,11 @@ static void gather_jitter(void)
         samples[i] = (unsigned char)((t1.lo - t0.lo) & 0xFF);
         mbedtls_sha256_update(&g_ctx, (const unsigned char *)&t1, sizeof t1);
     }
+    /* health verdict only; credited 0 bits (see the file header) */
     bits = assess(samples, JITTER_SAMPLES);
-    if (bits > 0) {
+    if (bits > 0)
         g_stats.jitter_passed = 1;
-        g_stats.jitter_bits = bits > 256 ? 256 : bits;
-    }
+    g_stats.jitter_bits = 0;
     memset(samples, 0, JITTER_SAMPLES);
     DisposePtr((Ptr)samples);
     (void)acc;
@@ -267,22 +274,42 @@ static OSErr seed_spec(FSSpec *spec, Boolean create)
     return FSMakeFSSpec(vRefNum, dirID, "\pMacShell Random Seed", spec);
 }
 
+/* Reads the seed file and uses it up: the full-strength flag is cleared
+   on disk before the seed is credited, so each stored seed counts once
+   (also if MacShell is quit before the next seed is written, or the Mac
+   stops). macentropy_save_seed() writes a fresh seed at the end of a
+   successful start. If the file can't be written (a locked disk), the
+   seed is still mixed in but not credited, and the user is asked for
+   mouse and keyboard input instead. */
 static void read_seed(void)
 {
     FSSpec spec;
     short ref;
     long len = sizeof(seed_file);
     seed_file sf;
+    int writable = 1;
 
     if (seed_spec(&spec, false) != noErr)
         return;
-    if (FSpOpenDF(&spec, fsRdPerm, &ref) != noErr)
-        return;
+    if (FSpOpenDF(&spec, fsRdWrPerm, &ref) != noErr) {
+        /* locked file or volume: still mix it in, but credit nothing */
+        writable = 0;
+        if (FSpOpenDF(&spec, fsRdPerm, &ref) != noErr)
+            return;
+    }
     if (FSRead(ref, &len, &sf) == noErr && len == sizeof sf
         && sf.magic == SEED_MAGIC && sf.version == SEED_VERSION) {
+        if ((sf.flags & SEED_FLAG_FULL) && writable) {
+            long wlen = sizeof(seed_file);
+            seed_file spent = sf;
+            spent.flags = (unsigned short)(spent.flags & ~SEED_FLAG_FULL);
+            if (SetFPos(ref, fsFromStart, 0) == noErr
+                && FSWrite(ref, &wlen, &spent) == noErr
+                && wlen == (long)sizeof(seed_file))
+                g_stats.seed_valid = 1;
+            memset(&spent, 0, sizeof spent);
+        }
         mbedtls_sha256_update(&g_ctx, sf.seed, sizeof sf.seed);
-        if (sf.flags & SEED_FLAG_FULL)
-            g_stats.seed_valid = 1;
     }
     FSClose(ref);
     memset(&sf, 0, sizeof sf);
