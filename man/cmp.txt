@@ -6,7 +6,8 @@ SYNOPSIS
 
 DESCRIPTION
     Compares two files byte by byte and reports the first difference,
-    or nothing if they are the same.
+    or nothing if they are the same; it fails (exit status 1) if they
+    differ.
 
 SEE ALSO
     md5sum, sha256sum

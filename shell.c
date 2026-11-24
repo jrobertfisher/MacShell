@@ -149,13 +149,38 @@ static void vt_write_mr(int idx, const char* s, size_t len)
 		{ if (sessions[idx].sshd_tap) sshd_output(idx, buf, bi); if (vt) vterm_input_write(vt, buf, bi); }
 }
 
+/* > and >> save Mac text: the terminal's CR LF line endings become CR */
+static char redir_prev[MAX_SESSIONS];
 static void redir_write(int idx, const char* s, size_t len)
 {
 	short ref = sessions[idx].redir_refnum;
 	if (ref != 0)
 	{
-		long count = (long)len;
-		FSWrite(ref, &count, s);
+		char out[512];
+		long n = 0, count;
+		size_t i;
+		for (i = 0; i < len; i++)
+		{
+			char c = s[i];
+			if (c == '\n')
+			{
+				if (redir_prev[idx] != '\r') out[n++] = '\r';  /* lone LF: a line end */
+			}
+			else
+				out[n++] = c;
+			redir_prev[idx] = c;
+			if (n >= (long)sizeof out - 1)
+			{
+				count = n;
+				FSWrite(ref, &count, out);
+				n = 0;
+			}
+		}
+		if (n > 0)
+		{
+			count = n;
+			FSWrite(ref, &count, out);
+		}
 	}
 }
 
@@ -166,7 +191,7 @@ static const char* const error_words[] = {
 	"refused", "denied", "unknown", "not a ", "bad ", "timed out", "missing", "not available",
 	"too many", "already exists", "no manual page", "not running", "unreachable", "incomplete",
 	"cancelled", "unavailable", "busy", "no match", "nothing found", "not empty", "unexpected",
-	"must be", "zero increment", "could not", "unable", "no previous", NULL
+	"must be", "zero increment", "could not", "unable", "no previous", "locked", NULL
 };
 
 void shell_note_output(int idx, const char* t)
@@ -1431,6 +1456,7 @@ static void cmd_cat(int idx, int argc, char* argv[])
 
 	char buf[512];
 	long count;
+	int last_cr = 0, at_line_start = 1;
 
 	while (1)
 	{
@@ -1439,16 +1465,14 @@ static void cmd_cat(int idx, int argc, char* argv[])
 
 		if (count > 0)
 		{
-			/* convert \r to \r\n for terminal display */
+			/* Mac (CR), Unix (LF) and DOS (CR LF) line endings */
 			long i;
 			for (i = 0; i < count; i++)
 			{
-				if (buf[i] == '\r')
-					vt_write(idx, "\r\n");
-				else if (buf[i] == '\n')
-					; /* skip bare LF (CR already handled) */
-				else
-					vt_char(idx, buf[i]);
+				char c = buf[i];
+				if (c == '\r') { vt_write(idx, "\r\n"); last_cr = 1; at_line_start = 1; }
+				else if (c == '\n') { if (!last_cr) vt_write(idx, "\r\n"); last_cr = 0; at_line_start = 1; }
+				else { vt_char(idx, c); last_cr = 0; at_line_start = 0; }
 			}
 		}
 
@@ -1456,33 +1480,65 @@ static void cmd_cat(int idx, int argc, char* argv[])
 	}
 
 	FSClose(refNum);
-	vt_write(idx, "\r\n");
+	if (!at_line_start)
+		vt_write(idx, "\r\n");                       /* the file didn't end with a newline */
 }
 
+/* mkdir [-p] <folder ...> */
 static void cmd_mkdir(int idx, int argc, char* argv[])
 {
-	struct session* s = &sessions[idx];
+	int parents = 0, i, made_any = 0;
 
-	if (argc < 2)
+	for (i = 1; i < argc; i++)
 	{
-		vt_write(idx, "usage: mkdir <name>\r\n");
-		return;
-	}
+		FSSpec spec;
+		OSErr e;
+		long newDirID;
 
-	Str255 pname;
-	{
-		int len = strlen(argv[1]);
-		if (len > 255) len = 255;
-		pname[0] = len;
-		memcpy(pname + 1, argv[1], len);
+		if (strcmp(argv[i], "-p") == 0) { parents = 1; continue; }
+		e = resolve_path(idx, argv[i], &spec);
+		if (e == noErr)
+		{
+			if (parents && is_directory(&spec)) continue;    /* -p: already there is fine */
+			printf_s(idx, "mkdir: %s: already exists\r\n", argv[i]);
+			continue;
+		}
+		if (e == dirNFErr && parents)
+		{
+			/* create each missing folder along the path */
+			char partial[256];
+			int k, n = strlen(argv[i]);
+			for (k = 1; k <= n; k++)
+			{
+				if (k < n && argv[i][k] != '/') continue;
+				if (k > (int)sizeof partial - 1) break;
+				memcpy(partial, argv[i], k);
+				partial[k] = '\0';
+				if (resolve_path(idx, partial, &spec) == fnfErr)
+					DirCreate(spec.vRefNum, spec.parID, spec.name, &newDirID);
+			}
+			if (resolve_path(idx, argv[i], &spec) == noErr && is_directory(&spec))
+			{
+				made_any = 1;
+				continue;
+			}
+			printf_s(idx, "mkdir: cannot create %s\r\n", argv[i]);
+			continue;
+		}
+		if (e != fnfErr)
+		{
+			printf_s(idx, "mkdir: %s: no such folder to put it in (use -p to create it)\r\n", argv[i]);
+			continue;
+		}
+		e = DirCreate(spec.vRefNum, spec.parID, spec.name, &newDirID);
+		if (e != noErr)
+			printf_s(idx, "mkdir: cannot create %s (error %d)\r\n", argv[i], (int)e);
+		else
+			made_any = 1;
 	}
-
-	long newDirID;
-	OSErr e = DirCreate(s->shell_vRefNum, s->shell_dirID, pname, &newDirID);
-	if (e != noErr)
-	{
-		vt_write(idx, "mkdir: failed to create directory\r\n");
-	}
+	if (argc < 2 || (argc == 2 && parents))
+		vt_write(idx, "usage: mkdir [-p] <folder ...>\r\n");
+	(void)made_any;
 }
 
 /* wait for y/n + Enter, pumping events to keep UI alive */
@@ -1788,7 +1844,7 @@ static void cmd_touch(int idx, int argc, char* argv[])
 	if (e == fnfErr)
 	{
 		/* create the file */
-		e = FSpCreate(&spec, '????', 'TEXT', smSystemScript);
+		e = FSpCreate(&spec, 'ttxt', 'TEXT', smSystemScript);   /* opens in SimpleText */
 		if (e != noErr)
 			vt_write(idx, "touch: create failed\r\n");
 	}
@@ -1813,36 +1869,80 @@ static void cmd_touch(int idx, int argc, char* argv[])
 	}
 }
 
+/* mv <source> <dest>: rename, move into a folder, or both (same disk) */
 static void cmd_mv(int idx, int argc, char* argv[])
 {
-	if (argc < 3)
+	FSSpec src, dst, dir_spec;
+	OSErr e;
+	long dest_dir;
+	Str255 new_name;
+
+	if (argc != 3)
 	{
 		vt_write(idx, "usage: mv <source> <dest>\r\n");
 		return;
 	}
-
-	FSSpec src_spec;
-	OSErr e = resolve_path(idx, argv[1], &src_spec);
+	e = resolve_path(idx, argv[1], &src);
 	if (e != noErr)
 	{
-		vt_write(idx, "mv: source not found\r\n");
+		printf_s(idx, "mv: %s: not found\r\n", argv[1]);
 		return;
 	}
 
-	/* try rename (same directory) */
-	Str255 new_name;
+	e = resolve_path(idx, argv[2], &dst);
+	if (e == noErr && is_directory(&dst))
 	{
-		int len = strlen(argv[2]);
-		if (len > 255) len = 255;
-		new_name[0] = len;
-		memcpy(new_name + 1, argv[2], len);
+		/* into an existing folder, keeping the name */
+		dest_dir = get_dir_id(&dst);
+		if (dst.vRefNum != src.vRefNum) { vt_write(idx, "mv: cannot move between disks; use cp and rm\r\n"); return; }
+		memcpy(new_name, src.name, src.name[0] + 1);
+	}
+	else if (e == fnfErr)
+	{
+		/* to a new name, possibly in another folder */
+		if (dst.vRefNum != src.vRefNum) { vt_write(idx, "mv: cannot move between disks; use cp and rm\r\n"); return; }
+		dest_dir = dst.parID;
+		memcpy(new_name, dst.name, dst.name[0] + 1);
+	}
+	else if (e == noErr)
+	{
+		printf_s(idx, "mv: %s already exists\r\n", argv[2]);
+		return;
+	}
+	else
+	{
+		printf_s(idx, "mv: %s: no such folder\r\n", argv[2]);
+		return;
 	}
 
-	e = FSpRename(&src_spec, new_name);
-	if (e == dupFNErr)
-		vt_write(idx, "mv: destination already exists\r\n");
-	else if (e != noErr)
-		vt_write(idx, "mv: rename failed\r\n");
+	if (dest_dir != src.parID)
+	{
+		/* is there already something with that name in the destination? */
+		if (FSMakeFSSpec(src.vRefNum, dest_dir, new_name, &dir_spec) == noErr)
+		{
+			printf_s(idx, "mv: %s already exists there\r\n", argv[2]);
+			return;
+		}
+		/* move first (keeping the old name), then rename if needed */
+		{
+			FSSpec target;
+			if (FSMakeFSSpec(src.vRefNum, dest_dir, "\p", &target) != noErr)
+			{
+				vt_write(idx, "mv: cannot find the destination folder\r\n");
+				return;
+			}
+			e = FSpCatMove(&src, &target);
+			if (e == dupFNErr) { vt_write(idx, "mv: a file with that name is already there\r\n"); return; }
+			if (e != noErr) { printf_s(idx, "mv: move failed (error %d)\r\n", (int)e); return; }
+			if (FSMakeFSSpec(src.vRefNum, dest_dir, src.name, &src) != noErr) return;
+		}
+	}
+	if (!EqualString(src.name, new_name, true, true))
+	{
+		e = FSpRename(&src, new_name);
+		if (e == dupFNErr) vt_write(idx, "mv: destination already exists\r\n");
+		else if (e != noErr) printf_s(idx, "mv: rename failed (error %d)\r\n", (int)e);
+	}
 }
 
 static void cmd_cp(int idx, int argc, char* argv[])
@@ -4079,6 +4179,8 @@ static void cmd_grep(int idx, int argc, char** argv)
 		vt_write(idx, num);
 		vt_write(idx, "\r\n");
 	}
+	if (match_count == 0)
+		sessions[idx].last_status = 1;                  /* like grep: nothing found */
 
 	FSClose(refNum);
 }
@@ -5143,6 +5245,7 @@ static void cmd_cmp(int idx, int argc, char** argv)
 				         "%s %s differ: byte %ld, line %ld\r\n",
 				         argv[1], argv[2], offset + i + 1, line);
 				vt_write(idx, msg);
+				sessions[idx].last_status = 1;
 				FSClose(ref1);
 				FSClose(ref2);
 				return;
@@ -5154,6 +5257,7 @@ static void cmd_cmp(int idx, int argc, char** argv)
 
 		if (c1 != c2)
 		{
+			sessions[idx].last_status = 1;
 			vt_write(idx, "cmp: EOF on ");
 			vt_write(idx, c1 < c2 ? argv[1] : argv[2]);
 			vt_write(idx, "\r\n");
@@ -6859,9 +6963,9 @@ retry_redirect:
 		int ret;
 		unsigned long hs_deadline = TickCount() + 1800; /* 30 sec */
 
-		vt_write(idx, "wget: WARNING: https certificate NOT verified (no certificate store on\r\n"
+		printf_s(idx, "%s: WARNING: https certificate NOT verified (no certificate store on\r\n"
 		              "      classic Mac OS). The connection is encrypted, but the site\r\n"
-		              "      could be impersonated.\r\n");
+		              "      could be impersonated.\r\n", s->wget_is_curl ? "curl" : "wget");
 		if (!s->wget_is_curl) vt_write(idx, "TLS handshake... ");
 
 		mbedtls_ssl_init(&ssl);
@@ -7468,7 +7572,7 @@ wget_emit_initial:
 		{
 			long kb = total_written / 1024L;
 			long kbps = (kb * 60L) / (long)download_elapsed_ticks;
-			printf_s(idx, "Average speed: %ld KB/s\r\n", kbps);
+			if (kbps > 0) printf_s(idx, "Average speed: %ld KB/s\r\n", kbps);
 		}
 	}
 	else if (s->wget_stdout)
@@ -8363,7 +8467,7 @@ static int ftp_download(int idx, EndpointRef ctrl_ep,
 	{
 		long kb = total_written / 1024L;
 		long kbps = (kb * 60L) / (long)download_elapsed_ticks;
-		printf_s(idx, "Average speed: %ld KB/s\r\n", kbps);
+		if (kbps > 0) printf_s(idx, "Average speed: %ld KB/s\r\n", kbps);
 	}
 
 	return download_ok;
@@ -8524,7 +8628,7 @@ upload_done:
 	{
 		long kb = total_sent / 1024L;
 		long kbps = (kb * 60L) / (long)upload_elapsed_ticks;
-		printf_s(idx, "Average speed: %ld KB/s\r\n", kbps);
+		if (kbps > 0) printf_s(idx, "Average speed: %ld KB/s\r\n", kbps);
 	}
 
 	return upload_ok;
@@ -10835,6 +10939,51 @@ static int scp_auth_prompt(struct session* s)
 	int ok;
 	unsigned int plen;
 
+	int sidx = (int)(s - sessions);
+	int remote = s->sshd_owned || s->hidden;           /* run over ssh: nobody at the Mac */
+
+	/* like ssh: log in with the key if there is one */
+	{
+		char pub[512], priv[512];
+		int needs = 0;
+		if (find_login_key(pub, sizeof pub, priv, sizeof priv, &needs))
+		{
+			copy_cstr_trunc(s->scp_pubkey_path, sizeof(s->scp_pubkey_path), pub);
+			copy_cstr_trunc(s->scp_privkey_path, sizeof(s->scp_privkey_path), priv);
+			s->scp_use_key = 1;
+			s->scp_password[0] = '\0';
+			if (!needs)
+				return 1;
+			if (remote)
+			{
+				printf_s(sidx, "scp: the key needs its passphrase, which can't be asked for over ssh\r\n");
+				return 0;
+			}
+			/* ask only for the passphrase */
+			TEInit();
+			InitDialogs(NULL);
+			InitCursor();
+			memcpy(saved_pw, prefs.password, sizeof(Str255));
+			prefs.password[0] = 0;
+			ok = password_dialog(DLOG_KEY_PASSWORD);
+			if (ok)
+			{
+				plen = (unsigned char)prefs.password[0];
+				if (plen > sizeof(s->scp_password) - 1)
+					plen = sizeof(s->scp_password) - 1;
+				memcpy(s->scp_password, prefs.password + 1, plen);
+				s->scp_password[plen] = '\0';
+			}
+			memcpy(prefs.password, saved_pw, sizeof(Str255));
+			return ok;
+		}
+	}
+	if (remote)
+	{
+		printf_s(sidx, "scp: no key in ~/.ssh, and a password can't be asked for over ssh\r\n");
+		return 0;
+	}
+
 	/* TEInit + InitDialogs may not have been called yet if the user
 	   went straight to local shell without opening any dialog first */
 	TEInit();
@@ -11386,16 +11535,21 @@ static void cmd_ln(int idx, int argc, char** argv)
 			return;
 		}
 
-		/* create the file */
-		e = HCreate(s->shell_vRefNum, s->shell_dirID, pname, 'adrp', 'MACS');
+		/* create the file where the path says (link_spec from resolve_path) */
+		if (e != fnfErr)
+		{
+			DisposeHandle((Handle)alias);
+			printf_s(idx, "ln: %s: no such folder\r\n", link_path);
+			return;
+		}
+		e = HCreate(link_spec.vRefNum, link_spec.parID, link_spec.name, 'adrp', 'MACS');
 		if (e != noErr)
 		{
 			DisposeHandle((Handle)alias);
 			vt_write(idx, "ln: cannot create file\r\n");
 			return;
 		}
-
-		e = FSMakeFSSpec(s->shell_vRefNum, s->shell_dirID, pname, &link_spec);
+		(void)pname; (void)s;
 	}
 
 	/* set kIsAlias flag */

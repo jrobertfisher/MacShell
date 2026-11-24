@@ -300,6 +300,7 @@ pascal void ButtonFrameProc(DialogRef dlg, DialogItemIndex itemNo);
 pascal Boolean TwoItemFilter(DialogPtr dlog, EventRecord *event, short *itemHit);
 int password_dialog(int dialog_resource);
 int key_dialog(void);
+int find_login_key(char* pub, int pub_size, char* priv, int priv_size, int* needs_passphrase);
 
 /* set by the shell's "ssh user@host": connect without the Connect dialog */
 extern int ssh_skip_connect_dialog;

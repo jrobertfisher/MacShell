@@ -1023,6 +1023,25 @@ void preferences_window(void)
 
 void init_session(struct session* s)
 {
+	/* state added for MacShell: a reused slot must not keep any of it
+	   (a stale passphrase prompt or ftp session would capture the input) */
+	s->keygen_stage = 0;
+	memset(s->keygen_pass, 0, sizeof(s->keygen_pass));
+	s->hide_input = 0;
+	s->ftp_mode = FTP_MODE_OFF;
+	s->ftp_ctrl_ep = kOTInvalidEndpointRef;
+	s->ftp_rbuf_ep = kOTInvalidEndpointRef;
+	s->ftp_rpos = 0;
+	memset(s->ftp_password, 0, sizeof(s->ftp_password));
+	s->pending_line[0] = '\0';
+	s->last_status = 0;
+	s->cur_cmd[0] = '\0';
+	s->shell_at_root = 0;
+	s->shell_has_prev = 0;
+	s->sshd_owned = 0;
+	s->sshd_tap = 0;
+	s->sshd_exec = 0;
+	s->hidden = 0;
 	s->in_use = 0;
 	s->type = SESSION_NONE;
 	s->tab_label[0] = '\0';
@@ -2667,6 +2686,39 @@ static char* default_key_path(const char* name)
 	if (out) { memcpy(out, *full_path, path_length); out[path_length] = '\0'; }
 	DisposeHandle(full_path);
 	return out;
+}
+
+/* The key to log in with, as ssh uses it: the saved key files if they still
+   exist, else ~/.ssh/id_ecdsa. Returns 1 and fills in the paths if found. */
+int find_login_key(char* pub, int pub_size, char* priv, int priv_size, int* needs_passphrase)
+{
+	FILE* f;
+	int ok = 0;
+	if (prefs.pubkey_path && prefs.pubkey_path[0] && prefs.privkey_path && prefs.privkey_path[0])
+	{
+		f = fopen(prefs.pubkey_path, "rb");
+		if (f) { fclose(f); f = fopen(prefs.privkey_path, "rb"); if (f) { fclose(f); ok = 1; } }
+		if (ok)
+		{
+			snprintf(pub, pub_size, "%s", prefs.pubkey_path);
+			snprintf(priv, priv_size, "%s", prefs.privkey_path);
+		}
+	}
+	if (!ok)
+	{
+		char* p = default_key_path("id_ecdsa.pub");
+		char* k = p ? default_key_path("id_ecdsa") : NULL;
+		if (p && k)
+		{
+			snprintf(pub, pub_size, "%s", p);
+			snprintf(priv, priv_size, "%s", k);
+			ok = 1;
+		}
+		free(p);
+		free(k);
+	}
+	if (ok) *needs_passphrase = key_file_needs_passphrase(priv);
+	return ok;
 }
 
 int key_dialog(void)

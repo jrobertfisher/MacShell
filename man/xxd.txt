@@ -7,14 +7,14 @@ SYNOPSIS
 
 DESCRIPTION
     Shows a file as a hex dump in xxd's format. With -r, turns such a
-    dump back into the original bytes (use > to save them).
+    dump back into the original bytes, saved as <file>.bin next to it.
 
 OPTIONS
-    -r        reverse: hex dump to bytes
+    -r        reverse: read a hex dump and write <file>.bin
 
 EXAMPLES
     xxd icon > icon.hex
-    xxd -r icon.hex > icon-copy
+    xxd -r icon.hex          (makes icon.hex.bin)
 
 SEE ALSO
-    hexdump
+    hexdump, cmp

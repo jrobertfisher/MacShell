@@ -15,6 +15,8 @@ OPTIONS
     -n        show line numbers
     -c        only count the matching lines
 
+    Like grep elsewhere, it fails (exit status 1) when nothing matches.
+
 EXAMPLES
     grep -n ssh notes.txt
     grep -ic "error" log.txt
