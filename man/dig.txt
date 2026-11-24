@@ -1,0 +1,31 @@
+NAME
+    dig - look up DNS records
+
+SYNOPSIS
+    dig [@server] <name> [type] [+short]
+    dig [@server] -x <address>
+
+DESCRIPTION
+    Asks a DNS server for records about name and shows the reply in
+    dig's usual form: the header, the question, the answer, authority
+    and additional sections, the query time and the server. It sends
+    its own DNS queries over UDP to the server in the TCP/IP control
+    panel, or to @server.
+
+    type is A (the default), AAAA, MX, NS, TXT, CNAME, SOA, PTR or ANY.
+    -x looks up the name of an IPv4 address. A name that doesn't exist
+    gives status NXDOMAIN and exit status 1.
+
+OPTIONS
+    @server   ask this DNS server (an IP address)
+    -x addr   reverse lookup of an IPv4 address
+    +short    show only the answers' data
+
+EXAMPLES
+    dig example.com
+    dig gmail.com MX
+    dig @1.1.1.1 example.com AAAA +short
+    dig -x 1.1.1.1
+
+SEE ALSO
+    nslookup, host, ping

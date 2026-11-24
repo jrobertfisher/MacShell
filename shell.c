@@ -194,6 +194,11 @@ static const char* const error_words[] = {
 	"must be", "zero increment", "could not", "unable", "no previous", "locked", NULL
 };
 
+void shell_set_status(int idx, int status)
+{
+	sessions[idx].last_status = status;
+}
+
 void shell_note_output(int idx, const char* t)
 {
 	struct session* s = &sessions[idx];
@@ -11738,8 +11743,8 @@ static void cmd_help(int idx, int argc, char* argv[])
 		"Bytes      hexdump xxd cmp md5sum sha1sum sha256sum sha512sum crc32",
 		"Mac files  getinfo chown settype setcreator fixtype chmod chattr label",
 		"System     date cal uptime uname hostname df free ps history clear colors",
-		"Network    ssh ssh-keygen sshd scp ftp wget curl telnet nc ping host",
-		"           ifconfig entropy",
+		"Network    ssh ssh-keygen sshd scp ftp wget curl telnet nc ping host dig",
+		"           nslookup ifconfig entropy",
 		"Shell      help man exit",
 		"",
 		"Other names: dir (ls), more less type (cat), copy (cp), ren rename (mv),",
@@ -11810,11 +11815,12 @@ static int escape_and_append(char* line, int pos, int max, const char* src, int 
 static const char* shell_commands[] = {
 	"basename", "cal", "cat", "cd", "chattr", "chmod", "chown", "clear",
 	"cls", "cmp", "colors", "copy", "cp", "crc32", "curl", "cut", "date", "del",
+	"dig",
 	"delete", "df", "dir", "dirname", "dos2unix", "echo", "entropy", "exit", "file",
 	"fixtype", "fold", "free", "ftp", "getinfo", "grep", "head", "help", "hexdump",
 	"history", "host", "hostname", "ifconfig", "info", "label", "less",
 	"ln", "ls", "mac2unix", "man", "md", "md5sum", "mkdir", "more", "mv", "nc",
-	"nl", "open", "ping", "ps", "pwd", "quit", "rd", "readlink",
+	"nl", "nslookup", "open", "ping", "ps", "pwd", "quit", "rd", "readlink",
 	"realpath", "ren", "rename", "rev", "rm", "rmdir", "rot13", "scp", "seq",
 	"setcreator", "settype", "sha1sum", "sha256sum", "sha512sum", "sleep",
 	"ssh", "ssh-keygen", "sshd", "strings", "tail", "telnet", "touch", "type", "uname",
@@ -12566,6 +12572,8 @@ static void shell_execute_one(int idx, char* line)
 	else if (strcmp(cmd, "telnet") == 0)    cmd_telnet(idx, argc, argv);
 	else if (strcmp(cmd, "nc") == 0)        cmd_nc(idx, argc, argv);
 	else if (strcmp(cmd, "host") == 0)      cmd_host(idx, argc, argv);
+	else if (strcmp(cmd, "dig") == 0)       cmd_dig(idx, argc, argv);
+	else if (strcmp(cmd, "nslookup") == 0)  cmd_nslookup(idx, argc, argv);
 	else if (strcmp(cmd, "ifconfig") == 0)  cmd_ifconfig(idx, argc, argv);
 	else if (strcmp(cmd, "ping") == 0)      cmd_ping(idx, argc, argv);
 	else if (strcmp(cmd, "colors") == 0)    cmd_colors(idx, argc, argv);

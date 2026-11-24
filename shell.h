@@ -20,3 +20,8 @@ void shell_run_line(int idx, char* line);
 int shell_is_busy(int idx);
 void shell_tick(void);
 void shell_note_output(int idx, const char* t);
+void shell_set_status(int idx, int status);
+
+/* dns.c */
+void cmd_dig(int idx, int argc, char* argv[]);
+void cmd_nslookup(int idx, int argc, char* argv[]);

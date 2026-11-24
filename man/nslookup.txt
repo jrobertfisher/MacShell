@@ -1,0 +1,22 @@
+NAME
+    nslookup - look up a name or address with DNS
+
+SYNOPSIS
+    nslookup [-type=TYPE] <name> [server]
+
+DESCRIPTION
+    Asks a DNS server about name and shows the answer in nslookup's
+    usual form. An IPv4 address is looked up in reverse (its name).
+    The server is the one in the TCP/IP control panel unless given.
+
+OPTIONS
+    -type=TYPE   A (the default), AAAA, MX, NS, TXT, CNAME, SOA or PTR
+
+EXAMPLES
+    nslookup example.com
+    nslookup -type=mx gmail.com
+    nslookup example.com 1.1.1.1
+    nslookup 1.1.1.1
+
+SEE ALSO
+    dig, host
