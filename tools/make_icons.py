@@ -161,7 +161,11 @@ def icon_family(rid, big, small, out):
 
 
 def about_pict():
-    """128x128 one-bit PICT (version 1, BitsRect) of the app icon."""
+    """128x128 black-and-white PICT for the About box, written by ImageMagick
+    as a standard version 2 picture (header, clip region, PackBits rows),
+    the form QuickDraw itself writes; System 7's QuickDraw rejected the
+    minimal version 1 picture used before."""
+    import subprocess, tempfile, os
     size = 128
     img = Image.new('RGBA', (size * 4, size * 4), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -171,22 +175,19 @@ def about_pict():
     SS = old
     img = img.resize((size, size), Image.LANCZOS)
     icon, _ = to_bw(img)
-    rows = bits_hex(icon)
-    body = bytes.fromhex(''.join(rows))
-    rect = (0).to_bytes(2, 'big') * 2 + size.to_bytes(2, 'big') * 2
-    pic = bytearray()
-    pic += rect                                   # picFrame
-    pic += b'\x11\x01'                            # version 1
-    pic += b'\x90'                                # BitsRect
-    pic += (size // 8).to_bytes(2, 'big')         # rowBytes
-    pic += rect + rect + rect                     # bounds, srcRect, dstRect
-    pic += b'\x00\x00'                            # mode: srcCopy
-    pic += body
-    pic += b'\xff'                                # end of picture
-    pic = (len(pic) + 2).to_bytes(2, 'big') + pic
-    if len(pic) % 2:
-        pic += b'\x00'
-    return pic.hex().upper(), img
+    bw = Image.new('1', (size, size), 1)
+    for y in range(size):
+        for x in range(size):
+            if icon[y][x]:
+                bw.putpixel((x, y), 0)
+    with tempfile.TemporaryDirectory() as t:
+        png, pct = os.path.join(t, 'about.png'), os.path.join(t, 'about.pict')
+        bw.save(png)
+        subprocess.check_call(['magick', png, '-type', 'Bilevel', 'PICT:' + pct])
+        data = open(pct, 'rb').read()[512:]          # drop the file header
+    # ImageMagick leaves picSize wrong; it is the picture's length (low 16 bits)
+    data = (len(data) & 0xFFFF).to_bytes(2, 'big') + data[2:]
+    return data.hex().upper(), img
 
 
 def main(out_r, out_png):
