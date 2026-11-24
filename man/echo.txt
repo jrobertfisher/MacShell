@@ -6,7 +6,8 @@ SYNOPSIS
 
 DESCRIPTION
     Prints its arguments separated by spaces. With > or >> it writes the
-    text to a file.
+    text to a file; files written this way have Mac (CR) line endings,
+    so SimpleText shows them properly.
 
 EXAMPLES
     echo Hello

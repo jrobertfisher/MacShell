@@ -1,15 +1,22 @@
 NAME
-    mkdir, md - create a folder
+    mkdir, md - create folders
 
 SYNOPSIS
-    mkdir <name>
+    mkdir [-p] <folder ...>
 
 DESCRIPTION
-    Creates a new folder.
+    Creates each folder. A path works: mkdir ~/Projects/old creates old
+    inside Projects. Without -p, the folders above it must already exist,
+    and an existing folder is an error.
+
+OPTIONS
+    -p        also create any missing folders along the path, and don't
+              complain if the folder already exists
 
 EXAMPLES
     mkdir Projects
-    mkdir "~/New Folder"
+    mkdir -p ~/Projects/2026/notes
+    mkdir "New Folder" Archive
 
 SEE ALSO
-    rmdir, cd
+    rmdir, cd, mv

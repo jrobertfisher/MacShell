@@ -17,22 +17,34 @@ What's different from SevenTTY
   has at least 256 bits.
 * **A clean look**: white text on black by default, a plain prompt, plain `ls`. Colour text from
   programs (for example `ls --color` on a server) still works.
-* **An interactive FTP client** with active and passive modes.
+* **SSH keys made on the Mac** (`ssh-keygen`, kept in `~/.ssh`), used automatically by `ssh
+  user@host` and `scp`.
 * **An SSH server** (`sshd start`): log in to MacShell from another computer with a key, with a
   log in `~/.sshd/logs`.
-* **`curl`** alongside `wget`.
+* **Unix-style paths**: `/Macintosh HD/Documents`, `~`, `/` for the list of disks, `cd -`.
+* **An interactive FTP client** with active and passive modes.
+* **Mac files survive transfers**: files with a resource fork are sent as MacBinary, and MacBinary
+  downloads are unpacked.
+* **Real network tools**: ICMP `ping` and `traceroute`, `dig` and `nslookup` with their own DNS
+  queries, and `curl` alongside `wget`.
+* **Manual pages** for every command, and a test suite that runs every command on a Mac.
 * **A new icon**, an original design.
 
 Features
 --------
-* **SSH client**: password and public key login, known hosts checking.
-* **Local shell** with almost 90 commands, tab completion and history (up/down arrows):
-  * Files: `ls`, `cd`, `pwd`, `cat`, `less`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `touch`, `ln`, `head`, `tail`, `grep`, `wc`, `cut`, `file`, `strings`, `hexdump`, `xxd`
-  * Text: `dos2unix`, `unix2mac`, `mac2unix`, `fold`, `nl`, `rev`, `rot13`, `seq`, `echo`
-  * Checksums: `md5sum`, `sha1sum`, `sha256sum`, `sha512sum`, `crc32`, `cmp`
-  * System: `ps`, `free`, `df`, `uname`, `uptime`, `date`, `cal`, `hostname`, `ifconfig`, `entropy`
+* **SSH client**: key login (ECDSA P-256 or RSA) or password, known hosts checking. `ssh
+  user@host` connects straight away with your key; `ssh` alone or Cmd+K opens the Connect dialog.
+* **Local shell** with 95 commands, tab completion and history (up/down arrows):
+  * Files: `ls`, `cd`, `pwd`, `cat`, `less`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `touch`, `ln`,
+    `readlink`, `realpath`, `basename`, `dirname`, `which`, `head`, `tail` (including `-f`), `file`
+  * Text: `grep`, `wc`, `cut`, `nl`, `fold`, `rev`, `rot13`, `strings`, `echo`, `seq`, `dos2unix`,
+    `unix2dos`, `mac2unix`, `unix2mac`
+  * Bytes and checksums: `hexdump`, `xxd`, `cmp`, `md5sum`, `sha1sum`, `sha256sum`, `sha512sum`, `crc32`
+  * System: `ps`, `free`, `df`, `uname`, `uptime`, `date`, `cal`, `hostname`, `history`, `sleep`,
+    `clear`, `colors`, `entropy`
   * Mac-specific: `getinfo`, `settype`, `setcreator`, `fixtype`, `chattr`, `chmod`, `chown`, `label`, `open`
-  * Network: `ssh`, `telnet`, `nc`, `ping`, `host`, `ftp`, `scp`, `wget`, `curl`
+  * Network: `ssh`, `ssh-keygen`, `sshd`, `scp`, `ftp`, `wget`, `curl`, `telnet`, `nc`, `ping`,
+    `traceroute`, `host`, `dig`, `nslookup`, `ifconfig`
 * **Help**: `help` lists the commands; `man <command>` (or `<command> --help`) shows a manual
   page for each, `man macshell` explains paths and keys, and `man -k <word>` searches. The pages
   are plain text in `man/`, built into the application.
@@ -49,8 +61,9 @@ Requirements
 * **System**: 7.1 or later (before 7.5, the Thread Manager extension is needed)
 * **Network**: Open Transport for SSH, FTP, wget and curl. The local shell works without it.
 
-MacShell has been tested on a Macintosh LC with a 68030 accelerator running System 7.5.3, and in
-emulated Mac OS 9. The source still has SevenTTY's PowerPC build, but it hasn't been built or
+MacShell is developed and tested in emulated Mac OS 9 (QEMU), where the test suite passes. It is
+meant for a Macintosh LC with a 68030 accelerator running System 7.5.3, but hasn't been tested on
+that hardware yet. The source still has SevenTTY's PowerPC build, but it hasn't been built or
 tested since the changes above.
 
 Randomness
@@ -102,7 +115,9 @@ ftp> bye
   server connects back to the Mac; this needs the Mac to be reachable from the server.
 * One-shot transfers also work: `ftp get user@host:/path/file`, `ftp put file user@host:/dir/`,
   `ftp ls user@host:/dir/`.
-* Transfers are binary and copy the data fork only.
+* Transfers are binary. A Mac file with a resource fork (an application, for example) is uploaded
+  as MacBinary with `.bin` added to its name, so nothing is lost on a non-Mac server; a MacBinary
+  download is unpacked into a working Mac file, and the `.bin` is kept.
 
 wget and curl
 -------------
@@ -112,7 +127,29 @@ wget and curl
 * `curl <url>` shows the page on screen. `-o file` saves to a file, `-O` saves with the name from
   the URL, `-I` shows only the headers and `-L` follows redirects. curl stops if the data is binary
   and suggests `-o` instead.
-* Downloads with a MacBinary header, or a known file extension, get the right Mac type and creator.
+* MacBinary downloads are unpacked (the `.bin` is kept); other files get a Mac type and creator
+  from their extension.
+
+SSH keys and the SSH server
+---------------------------
+* `ssh-keygen` makes an ECDSA P-256 key pair on the Mac, in `~/.ssh` (`id_ecdsa` and
+  `id_ecdsa.pub`), optionally protected by a passphrase. Put the public key in
+  `~/.ssh/authorized_keys` on the servers you use; `ssh user@host` and `scp` then use it without
+  asking for anything.
+* `sshd start` runs MacShell's own SSH server in its own tab, so another computer can log in with
+  `ssh user@mac` (an interactive shell in a new tab) or run one command with `ssh user@mac
+  'command'`, which returns the command's exit status. It accepts keys only, from
+  `~/.ssh/authorized_keys` on the Mac (ECDSA P-256, or RSA of 2048 bits or more), uses ECDH
+  P-256, AES-128-CTR with HMAC-SHA-256 and strict key exchange, and logs every connection and
+  rejected key in `~/.sshd/logs/sshd.log` (never more than 512 KB). See `man sshd`.
+
+DNS and network tools
+---------------------
+* `ping` sends real ICMP echo requests (until Ctrl+C, or `-c N`); `ping host port` tests a TCP
+  port instead. `traceroute` shows the routers on the way to a host.
+* `dig` and `nslookup` send their own DNS queries over UDP (A, AAAA, MX, NS, TXT, CNAME, SOA,
+  PTR) and show the answers in their usual formats. `host` does simple lookups.
+* `ifconfig` shows the address, netmask, gateway, DNS server, hardware address and MTU.
 
 Security notes
 --------------
@@ -122,6 +159,7 @@ Security notes
 * **FTP and Telnet are not encrypted.** Passwords and files cross the network as plain text. Use
   them only on a network you trust; use SSH or `scp` otherwise.
 * SSH checks the server's host key against MacShell's known hosts file.
+* The SSH server is off until you start it, and accepts keys only, never passwords.
 
 Colour schemes
 --------------
@@ -150,6 +188,14 @@ Keyboard shortcuts
 | Cmd+C, Cmd+V | Copy, paste |
 | Shift+Page Up/Down | Scroll back |
 | Ctrl+C | Cancel the current command or transfer |
+
+Tests
+-----
+`tests/remote/run_tests.py` runs every MacShell command on a Mac (real or emulated) over SSH and
+checks its output and exit status, mostly against what Linux's own tools give for the same files:
+over 100 tests, from checksums and text tools to FTP, `dig` and `traceroute`.
+`tests/host/test_dnsmsg.py` tests the DNS code on the build computer against real DNS replies.
+See `tests/README.md`.
 
 Building
 --------

@@ -5,8 +5,10 @@ SYNOPSIS
     rm [-i] <file ...>
 
 DESCRIPTION
-    Deletes files. Wildcards work: rm *.tmp. Deleted files don't go to
-    the Trash and can't be recovered. Folders are removed with rmdir.
+    Deletes files. Wildcards work, also in another folder: rm *.tmp,
+    rm ~/Downloads/*.bin. Deleted files don't go to the Trash and can't
+    be recovered. Locked files are refused (see chmod). Folders are
+    removed with rmdir.
 
 OPTIONS
     -i        ask before deleting each file
@@ -14,6 +16,7 @@ OPTIONS
 EXAMPLES
     rm old.txt
     rm -i *.bak
+    rm ~/tmp/*
 
 SEE ALSO
-    rmdir, mv
+    rmdir, mv, chmod

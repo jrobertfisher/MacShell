@@ -1,16 +1,20 @@
 NAME
-    mv, ren, rename - rename a file or folder
+    mv, ren, rename - move or rename a file or folder
 
 SYNOPSIS
-    mv <name> <new name>
+    mv <source> <destination>
 
 DESCRIPTION
-    Renames a file or folder within its folder. It doesn't move items
-    between folders; use cp and rm for that. Fails if new name already
-    exists.
+    If destination is an existing folder, moves source into it, keeping
+    its name. Otherwise destination is the new name, which may include a
+    path to another folder (moving and renaming at once). Both must be on
+    the same disk; to move between disks, use cp and then rm. It never
+    replaces an existing file.
 
 EXAMPLES
     mv notes.txt notes-2026.txt
+    mv notes.txt ~/Archive
+    mv ~/Archive/notes.txt ~/old-notes.txt
 
 SEE ALSO
-    cp, rm
+    cp, rm, mkdir

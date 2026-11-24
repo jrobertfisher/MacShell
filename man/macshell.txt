@@ -25,6 +25,7 @@ DESCRIPTION
     Output to a file
       command > file    write the output to file (replacing it)
       command >> file   add the output to the end of file
+    Files written this way have Mac (CR) line endings.
     There are no pipes (|).
 
     Several commands on one line

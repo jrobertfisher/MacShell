@@ -5,8 +5,11 @@ SYNOPSIS
     touch <file>
 
 DESCRIPTION
-    Creates an empty file, or sets an existing file's modification date
-    to now.
+    Creates an empty text file (one SimpleText opens), or sets an
+    existing file's modification date to now.
+
+EXAMPLES
+    touch notes.txt
 
 SEE ALSO
-    ls, getinfo
+    ls, getinfo, echo

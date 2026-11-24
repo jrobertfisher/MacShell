@@ -7,10 +7,15 @@ SYNOPSIS
 
 DESCRIPTION
     Copies a file from or to another computer over an encrypted SSH
-    connection, logging in the same way as ssh. A Mac file with a
-    resource fork (such as an application) is sent as MacBinary with .bin
-    added to the name, so it arrives complete; a MacBinary file you
-    download is unpacked, and the .bin kept.
+    connection. Like ssh, it logs in with your key without asking: the
+    key files you chose before, or ~/.ssh/id_ecdsa. It asks only for the
+    key's passphrase if it has one, and asks for a password only if there
+    is no key. Run over ssh (no one at the Mac), it never shows a dialog:
+    if it would need one, it says so and fails.
+
+    A Mac file with a resource fork (such as an application) is sent as
+    MacBinary with .bin added to the name, so it arrives complete; a
+    MacBinary file you download is unpacked, and the .bin kept.
 
 OPTIONS
     -n        don't show the progress line
