@@ -516,7 +516,8 @@ static int telnet_process(int session_idx, const unsigned char* in, int in_len,
 /* read functions                                                     */
 /* ------------------------------------------------------------------ */
 
-static int ansi_sys_fixup(int session_idx, const char* in, int len, char* out);
+static int ansi_sys_fixup(int session_idx, const char* in, int len, char* out,
+                          int out_size);
 
 static void telnet_read(int session_idx)
 {
@@ -554,7 +555,7 @@ static void telnet_read(int session_idx)
 	if (clean_len > 0)
 	{
 		fixup_len = ansi_sys_fixup(session_idx, (char*)clean, clean_len,
-		                           fixup);
+		                           fixup, sizeof(fixup));
 		vterm_input_write(s->vterm, fixup, fixup_len);
 	}
 }
@@ -565,9 +566,12 @@ static void telnet_read(int session_idx)
    vterm interprets ESC[s as DECSLRM (set left/right margins) which
    breaks BBS ANSI art that uses ESC[s/u for cursor save/restore.
    Uses per-session state to handle sequences split across TCP chunks.
-   Reads from in, writes to out. Returns output length. */
+   Reads from in, writes at most out_size bytes to out and returns the
+   output length. A sequence started in one chunk can add two bytes to the
+   next one's output, so the output is checked against out_size; whatever
+   doesn't fit is left out whole rather than cut mid-sequence. */
 static int ansi_sys_fixup(int session_idx, const char* in, int len,
-                          char* out)
+                          char* out, int out_size)
 {
 	struct session* s = &sessions[session_idx];
 	int ri = 0, wi = 0;
@@ -582,7 +586,10 @@ static int ansi_sys_fixup(int session_idx, const char* in, int len,
 				if (c == '\033')
 					s->ansi_fixup_state = 1;
 				else
+				{
+					if (wi + 1 > out_size) return wi;
 					out[wi++] = c;
+				}
 				ri++;
 				break;
 
@@ -595,6 +602,7 @@ static int ansi_sys_fixup(int session_idx, const char* in, int len,
 				else
 				{
 					/* not ESC[, emit the ESC and reprocess this byte */
+					if (wi + 1 > out_size) return wi;
 					out[wi++] = '\033';
 					s->ansi_fixup_state = 0;
 				}
@@ -603,16 +611,19 @@ static int ansi_sys_fixup(int session_idx, const char* in, int len,
 			case 2: /* saw ESC[ */
 				if (c == 's')
 				{
+					if (wi + 2 > out_size) return wi;
 					out[wi++] = '\033';
 					out[wi++] = '7';
 				}
 				else if (c == 'u')
 				{
+					if (wi + 2 > out_size) return wi;
 					out[wi++] = '\033';
 					out[wi++] = '8';
 				}
 				else
 				{
+					if (wi + 3 > out_size) return wi;
 					out[wi++] = '\033';
 					out[wi++] = '[';
 					out[wi++] = c;
@@ -675,7 +686,8 @@ static void nc_raw_read(int session_idx)
 	}
 
 	clean_len = lf_to_crlf(s->recv_buffer, (int)rc, clean);
-	fixup_len = ansi_sys_fixup(session_idx, clean, clean_len, fixup);
+	fixup_len = ansi_sys_fixup(session_idx, clean, clean_len, fixup,
+	                           sizeof(fixup));
 
 	/* write to redirect file if active (nc > file) */
 	if (s->redir_refnum != 0)

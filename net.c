@@ -52,9 +52,12 @@ void ssh_write(char* buf, size_t len)
 /* Translate ANSI.SYS sequences to DEC VT equivalents.
    ESC[s -> ESC 7 (save cursor), ESC[u -> ESC 8 (restore cursor).
    Uses per-session state to handle sequences split across chunks.
-   Reads from in, writes to out. Returns output length. */
+   Reads from in, writes at most out_size bytes to out and returns the
+   output length. A sequence started in one chunk can add two bytes to the
+   next one's output, so the output is checked against out_size; whatever
+   doesn't fit is left out whole rather than cut mid-sequence. */
 static int ansi_sys_fixup(int session_idx, const char* in, int len,
-                          char* out)
+                          char* out, int out_size)
 {
 	struct session* s = &sessions[session_idx];
 	int ri = 0, wi = 0;
@@ -69,7 +72,10 @@ static int ansi_sys_fixup(int session_idx, const char* in, int len,
 				if (c == '\033')
 					s->ansi_fixup_state = 1;
 				else
+				{
+					if (wi + 1 > out_size) return wi;
 					out[wi++] = c;
+				}
 				ri++;
 				break;
 
@@ -81,6 +87,7 @@ static int ansi_sys_fixup(int session_idx, const char* in, int len,
 				}
 				else
 				{
+					if (wi + 1 > out_size) return wi;
 					out[wi++] = '\033';
 					s->ansi_fixup_state = 0;
 				}
@@ -89,16 +96,19 @@ static int ansi_sys_fixup(int session_idx, const char* in, int len,
 			case 2:
 				if (c == 's')
 				{
+					if (wi + 2 > out_size) return wi;
 					out[wi++] = '\033';
 					out[wi++] = '7';
 				}
 				else if (c == 'u')
 				{
+					if (wi + 2 > out_size) return wi;
 					out[wi++] = '\033';
 					out[wi++] = '8';
 				}
 				else
 				{
+					if (wi + 3 > out_size) return wi;
 					out[wi++] = '\033';
 					out[wi++] = '[';
 					out[wi++] = c;
@@ -134,7 +144,7 @@ void ssh_read(int session_idx)
 	{
 		char fixup[SSH_BUFFER_SIZE];
 		int fixup_len = ansi_sys_fixup(session_idx, s->recv_buffer, rc,
-		                               fixup);
+		                               fixup, sizeof(fixup));
 		rc = fixup_len;
 		if (rc > 0)
 			memcpy(s->recv_buffer, fixup, rc);
@@ -556,6 +566,15 @@ kh_done:
 }
 
 
+/* kOTLookErr only says an Open Transport event is waiting. "Sending may
+   continue" (T_GODATA) and "data arrived" (T_DATA) just mean "try again".
+   Returns 1 for those. */
+static int ot_event_harmless(EndpointRef ep)
+{
+	OTResult ev = OTLook(ep);
+	return ev == T_GODATA || ev == T_GOEXDATA || ev == T_DATA || ev == T_EXDATA;
+}
+
 ssize_t network_recv_callback(libssh2_socket_t sock, void *buffer,
                size_t length, int flags, void **abstract)
 {
@@ -579,6 +598,12 @@ ssize_t network_recv_callback(libssh2_socket_t sock, void *buffer,
 		return -EAGAIN;
 	}
 
+	if (ret == kOTLookErr && s->thread_command != EXIT && ot_event_harmless(s->endpoint))
+	{
+		YieldToAnyThread();
+		return -EAGAIN;
+	}
+
 	// if we got anything other than data or nothing, return an error
 	if (ret != kOTNoDataErr) return -1;
 
@@ -596,8 +621,11 @@ ssize_t network_send_callback(libssh2_socket_t sock, const void *buffer,
 
 	if (ret == kOTLookErr)
 	{
-		OTResult lookresult = OTLook(s->endpoint);
-		(void)lookresult;
+		if (s->thread_command != EXIT && ot_event_harmless(s->endpoint))
+		{
+			YieldToAnyThread();
+			return -EAGAIN;
+		}
 		return -1;
 	}
 
