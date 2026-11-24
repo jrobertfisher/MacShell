@@ -113,6 +113,8 @@ struct conn
 	long rlen;
 	unsigned char pkt[RBUF_SIZE];       /* decrypted payload of the current packet */
 	unsigned char sbuf[RBUF_SIZE];      /* outgoing packet */
+	unsigned char obuf[OUR_MAXPKT + 16]; /* flush_output's channel data message
+	                                       (kept here, not on the thread's stack) */
 	unsigned long seq_in, seq_out;
 	struct cipher_state in, out, next_in, next_out;
 	int have_next;
@@ -436,8 +438,9 @@ static int hostkey_load_or_make(int idx)
 
 	if (FSpOpenDF(&spec, fsRdPerm, &ref) == noErr)
 	{
-		FSRead(ref, &n, der);
+		OSErr re = FSRead(ref, &n, der);       /* eofErr: file shorter than der, n is right */
 		FSClose(ref);
+		if (re != noErr && re != eofErr) n = 0;
 		ret = mbedtls_pk_parse_key(&g_hostkey, der, n, NULL, 0, rng, &g_drbg);
 		mbedtls_platform_zeroize(der, sizeof der);
 		if (ret == 0 && mbedtls_pk_get_type(&g_hostkey) == MBEDTLS_PK_ECKEY)
@@ -482,6 +485,8 @@ static void hostkey_fingerprint(char* out, int size)
 /* network                                                            */
 /* ------------------------------------------------------------------ */
 
+static int net_poll(struct conn* c);
+
 static int net_send(struct conn* c, const unsigned char* d, long n)
 {
 	unsigned long deadline = TickCount() + 1800;
@@ -491,7 +496,24 @@ static int net_send(struct conn* c, const unsigned char* d, long n)
 		if (!c->alive) return 0;
 		r = OTSnd(c->ep, (void*)d, n, 0);
 		if (r == kOTFlowErr || r == kOTNoDataErr) { YieldToAnyThread(); if (TickCount() > deadline) return 0; continue; }
-		if (r == kOTLookErr) { OTLook(c->ep); c->alive = 0; return 0; }
+		if (r == kOTLookErr)
+		{
+			/* an event is waiting. "Sending may continue" (T_GODATA) and
+			   "data arrived" (T_DATA) just mean: read the data in and try again.
+			   A disconnect ends the connection. */
+			OTResult ev = OTLook(c->ep);
+			if (ev == T_GODATA || ev == T_GOEXDATA) continue;
+			if ((ev == T_DATA || ev == T_EXDATA) && net_poll(c))
+			{
+				YieldToAnyThread();
+				if (TickCount() > deadline) return 0;
+				continue;
+			}
+			if (ev == T_ORDREL) OTRcvOrderlyDisconnect(c->ep);
+			else if (ev == T_DISCONNECT) OTRcvDisconnect(c->ep, NULL);
+			c->alive = 0;
+			return 0;
+		}
 		if (r < 0) { c->alive = 0; return 0; }
 		d += r; n -= r;
 		deadline = TickCount() + 1800;
@@ -854,7 +876,7 @@ static int key_is_authorized(const unsigned char* blob, long blob_len)
 	long sys, docs, ssh;
 	FSSpec spec;
 	short ref;
-	long size, i;
+	long size, i, line_no = 1;
 	char* text;
 	int found = 0;
 	CInfoPBRec pb;
@@ -882,31 +904,69 @@ static int key_is_authorized(const unsigned char* blob, long blob_len)
 	FSClose(ref);
 	text[size] = 0;
 
-	/* each line: [options] type base64 [comment]; compare the decoded key */
+	/* Each line is "type base64 [comment]", with the key type first.
+	   A line starting with '#' is a comment. MacShell doesn't support
+	   OpenSSH's options before the key type (restrict, command=, from=,
+	   expiry-time=, no-pty...), so a key on such a line is refused, and the
+	   log says which line. */
 	i = 0;
 	while (i < size && !found)
 	{
-		long e = i, t;
+		long e = i, ts, te;
 		while (e < size && text[e] != '\n' && text[e] != '\r') e++;
-		for (t = i; t < e; t++)
+
+		ts = i;
+		while (ts < e && (text[ts] == ' ' || text[ts] == '\t')) ts++;
+		te = ts;
+		while (te < e && text[te] != ' ' && text[te] != '\t') te++;
+
+		if (ts < e && text[ts] != '#')
 		{
-			if ((t == i || text[t - 1] == ' ') &&
-			    (strncmp(text + t, "ecdsa-sha2-nistp256 ", 20) == 0 || strncmp(text + t, "ssh-rsa ", 8) == 0))
+			int is_type = (te - ts == 19 && memcmp(text + ts, "ecdsa-sha2-nistp256", 19) == 0) ||
+			              (te - ts == 7  && memcmp(text + ts, "ssh-rsa", 7) == 0);
+			long b, be;
+			unsigned char dec[1100];
+			size_t dlen;
+
+			b = te;
+			if (!is_type)
 			{
-				long b = t, be;
-				unsigned char dec[1100];
-				size_t dlen;
-				while (b < e && text[b] != ' ') b++;
-				while (b < e && text[b] == ' ') b++;
-				be = b;
-				while (be < e && text[be] != ' ') be++;
-				if (mbedtls_base64_decode(dec, sizeof dec, &dlen, (unsigned char*)text + b, be - b) == 0 &&
-				    (long)dlen == blob_len && memcmp(dec, blob, dlen) == 0)
+				/* an options line: find the key type further on, so a
+				   matching key can be reported as refused (below) */
+				long q = te;
+				while (q < e)
+				{
+					long qe;
+					while (q < e && (text[q] == ' ' || text[q] == '\t')) q++;
+					qe = q;
+					while (qe < e && text[qe] != ' ' && text[qe] != '\t') qe++;
+					if ((qe - q == 19 && memcmp(text + q, "ecdsa-sha2-nistp256", 19) == 0) ||
+					    (qe - q == 7 && memcmp(text + q, "ssh-rsa", 7) == 0))
+					{
+						b = qe;
+						break;
+					}
+					q = qe;
+				}
+			}
+			while (b < e && (text[b] == ' ' || text[b] == '\t')) b++;
+			be = b;
+			while (be < e && text[be] != ' ' && text[be] != '\t') be++;
+
+			if (be > b &&
+			    mbedtls_base64_decode(dec, sizeof dec, &dlen, (unsigned char*)text + b, be - b) == 0 &&
+			    (long)dlen == blob_len && memcmp(dec, blob, dlen) == 0)
+			{
+				if (is_type)
 					found = 1;
-				break;
+				else
+					log_only("authorized_keys line %ld: this key matches but the "
+					         "line has options, which MacShell does not support; "
+					         "key refused", line_no);
 			}
 		}
 		i = e + 1;
+		line_no++;
 	}
 	DisposePtr(text);
 	return found;
@@ -1182,14 +1242,14 @@ static void flush_output(struct conn* c)
 {
 	while (c->chan_open && !c->close_sent && c->outq_len > 0 && c->peer_window > 0 && c->alive)
 	{
-		unsigned char b[OUR_MAXPKT + 16];
+		unsigned char* b = c->obuf;
 		long n = c->outq_len;
 		struct wr w;
 		if (n > (long)c->peer_window) n = c->peer_window;
 		if (n > (long)c->peer_maxpkt - 64) n = c->peer_maxpkt - 64;
 		if (n > (long)OUR_MAXPKT) n = OUR_MAXPKT;
 		if (n <= 0) break;
-		w.p = b; w.n = 0; w.max = sizeof b; w.bad = 0;
+		w.p = b; w.n = 0; w.max = sizeof c->obuf; w.bad = 0;
 		w_u8(&w, SSH_MSG_CHANNEL_DATA);
 		w_u32(&w, c->peer_chan);
 		w_str(&w, c->outq, n);
@@ -1384,7 +1444,12 @@ static void run_connection(struct conn* c)
 			if (strncmp(line, "SSH-2.0-", 8) == 0) break;
 			continue;                                       /* skip anything else */
 		}
-		if (c->rlen > 1000 || TickCount() - start > 60 * 30) return;
+		/* every SSH client sends its version line straight away */
+		if (c->rlen > 1000 || TickCount() - start > 60 * 10)
+		{
+			log_only("%s: no SSH version line within 10 seconds, disconnected", c->peer);
+			return;
+		}
 		YieldToAnyThread();
 	}
 	if (!c->alive || g_stop) return;
