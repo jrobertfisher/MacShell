@@ -23,6 +23,13 @@ DESCRIPTION
     Preferences:MacShell SSH Host Key. sshd start and sshd status show
     its fingerprint; check it against what ssh shows on first connecting.
 
+    Everything the server does is logged with the date and time in
+    ~/.sshd/logs/sshd.log: starts and stops, connections, logins (with
+    the key's fingerprint), rejected keys, commands run and disconnects.
+    What is typed and shown during a session isn't logged. At 256 KB
+    the log becomes sshd.log.1. tail ~/.sshd/logs/sshd.log shows the
+    latest entries.
+
     Security: ECDH P-256 key exchange with strict key exchange (against
     the Terrapin attack), AES-128-CTR with HMAC-SHA-256 (encrypt then
     MAC). Logins that don't finish within two minutes are dropped, and
@@ -37,6 +44,7 @@ EXAMPLES
     sshd start
     cat laptop.pub >> ~/.ssh/authorized_keys
     sshd status
+    tail -n 20 ~/.sshd/logs/sshd.log
 
 SEE ALSO
     ssh, ssh-keygen, entropy

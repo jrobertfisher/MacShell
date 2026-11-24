@@ -26,6 +26,7 @@
 #include <Files.h>
 #include <Folders.h>
 #include <Script.h>
+#include <DateTimeUtils.h>
 #include <stdarg.h>
 #include <Threads.h>
 #include <string.h>
@@ -164,16 +165,113 @@ static long g_hostkey_blob_len = 0;
 /* messages to the tab that started the server                        */
 /* ------------------------------------------------------------------ */
 
+/* folder dirID of name inside parent, created if missing */
+static int log_folder(short vref, long parent, const char* name, long* dir)
+{
+	CInfoPBRec pb;
+	Str255 pn;
+	OSErr err;
+	pn[0] = strlen(name);
+	memcpy(pn + 1, name, pn[0]);
+	memset(&pb, 0, sizeof pb);
+	pb.dirInfo.ioNamePtr = pn;
+	pb.dirInfo.ioVRefNum = vref;
+	pb.dirInfo.ioDrDirID = parent;
+	err = PBGetCatInfoSync(&pb);
+	if (err == noErr)
+	{
+		if (!(pb.dirInfo.ioFlAttrib & 0x10)) return 0;
+		*dir = pb.dirInfo.ioDrDirID;
+		return 1;
+	}
+	return err == fnfErr && DirCreate(vref, parent, pn, dir) == noErr;
+}
+
+/* Append a line to ~/.sshd/logs/sshd.log (Documents:.sshd:logs on the
+   startup disk), with the date and time. At 256 KB it becomes sshd.log.1. */
+#define LOG_MAX 262144L
+static void log_line(const char* text)
+{
+	short vref, ref;
+	long sys, docs, sshd_dir, logs, eof, n;
+	FSSpec spec;
+	unsigned long secs;
+	DateTimeRec dt;
+	char line[320];
+	int i, k;
+
+	if (FindFolder(kOnSystemDisk, kSystemFolderType, kDontCreateFolder, &vref, &sys) != noErr) return;
+	if (!log_folder(vref, fsRtDirID, "Documents", &docs) ||
+	    !log_folder(vref, docs, ".sshd", &sshd_dir) ||
+	    !log_folder(vref, sshd_dir, "logs", &logs))
+		return;
+
+	if (FSMakeFSSpec(vref, logs, "\psshd.log", &spec) == fnfErr)
+		FSpCreate(&spec, 'ttxt', 'TEXT', smSystemScript);
+	if (FSpOpenDF(&spec, fsRdWrPerm, &ref) != noErr) return;
+	GetEOF(ref, &eof);
+	if (eof > LOG_MAX)
+	{
+		FSSpec old;
+		FSClose(ref);
+		if (FSMakeFSSpec(vref, logs, "\psshd.log.1", &old) == noErr) FSpDelete(&old);
+		FSpRename(&spec, "\psshd.log.1");
+		FSMakeFSSpec(vref, logs, "\psshd.log", &spec);
+		FSpCreate(&spec, 'ttxt', 'TEXT', smSystemScript);
+		if (FSpOpenDF(&spec, fsRdWrPerm, &ref) != noErr) return;
+		eof = 0;
+	}
+
+	GetDateTime(&secs);
+	SecondsToDate(secs, &dt);
+	n = snprintf(line, sizeof line, "%04d-%02d-%02d %02d:%02d:%02d ",
+	             dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
+	/* the message without its "sshd: " prefix and line ending; Mac line endings */
+	if (strncmp(text, "sshd: ", 6) == 0) text += 6;
+	for (i = 0, k = n; text[i] && k < (int)sizeof line - 2; i++)
+		if (text[i] != '\r' && text[i] != '\n')
+			line[k++] = text[i];
+	line[k++] = '\r';
+	n = k;
+	SetFPos(ref, fsFromStart, eof);
+	FSWrite(ref, &n, line);
+	FSClose(ref);
+}
+
+/* a message for the sshd tab and the log */
 static void say(const char* fmt, ...)
 {
 	char buf[256];
 	va_list ap;
-	if (g_msg_idx < 0 || g_msg_idx >= MAX_SESSIONS || !sessions[g_msg_idx].in_use)
-		return;
 	va_start(ap, fmt);
 	vsnprintf(buf, sizeof buf, fmt, ap);
 	va_end(ap);
-	printf_s(g_msg_idx, "%s", buf);
+	log_line(buf);
+	if (g_msg_idx >= 0 && g_msg_idx < MAX_SESSIONS && sessions[g_msg_idx].in_use)
+		printf_s(g_msg_idx, "%s", buf);
+}
+
+/* a message for the log only */
+static void log_only(const char* fmt, ...)
+{
+	char buf[256];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof buf, fmt, ap);
+	va_end(ap);
+	log_line(buf);
+}
+
+/* "SHA256:..." of a public key blob */
+static void blob_fingerprint(const unsigned char* blob, long len, char* out, int size)
+{
+	unsigned char h[32], b64[64];
+	size_t n;
+	mbedtls_sha256(blob, len, h, 0);
+	mbedtls_base64_encode(b64, sizeof b64, &n, h, 32);
+	while (n > 0 && b64[n - 1] == '=') n--;
+	b64[n] = 0;
+	snprintf(out, size, "SHA256:%s", (char*)b64);
 }
 
 /* ------------------------------------------------------------------ */
@@ -868,7 +966,10 @@ static void send_auth_failure(struct conn* c)
 	w_u8(&w, 0);
 	send_packet(c, b, w.n);
 	if (++c->auth_failures >= 10)
+	{
+		log_only("%s: too many rejected keys, disconnected", c->peer);
 		send_disconnect(c, 14, "too many authentication failures");
+	}
 }
 
 static void handle_userauth(struct conn* c, const unsigned char* p, long n)
@@ -906,6 +1007,12 @@ static void handle_userauth(struct conn* c, const unsigned char* p, long n)
 	}
 	if (!key_is_authorized(blob, bl))
 	{
+		char fp[64], u[64];
+		long n2 = ul < (long)sizeof u - 1 ? ul : (long)sizeof u - 1;
+		memcpy(u, user, n2);
+		u[n2] = 0;
+		blob_fingerprint(blob, bl, fp, sizeof fp);
+		log_only("rejected key for %s from %s: %s %s (not in authorized_keys)", u, c->peer, algs, fp);
 		send_auth_failure(c);
 		return;
 	}
@@ -935,14 +1042,24 @@ static void handle_userauth(struct conn* c, const unsigned char* p, long n)
 		w_bytes(&w, p, req_len);
 		ok = !w.bad && verify_sig(algs, blob, bl, sig, sgl, data, w.n);
 		DisposePtr((Ptr)data);
-		if (!ok) { send_auth_failure(c); return; }
+		if (!ok)
+		{
+			log_only("bad signature from %s (%s key)", c->peer, algs);
+			send_auth_failure(c);
+			return;
+		}
 	}
 	memcpy(c->user, user, ul);
 	c->user[ul] = 0;
 	c->authed = 1;
 	send_simple(c, SSH_MSG_USERAUTH_SUCCESS, 0, 0);
-	say("sshd: %s logged in from %s with an %s key\r\n", c->user, c->peer,
-	    algs[0] == 'e' ? "ECDSA" : "RSA");
+	{
+		char fp[64];
+		blob_fingerprint(blob, bl, fp, sizeof fp);
+		say("sshd: %s logged in from %s with an %s key\r\n", c->user, c->peer,
+		    algs[0] == 'e' ? "ECDSA" : "RSA");
+		log_only("  key %s", fp);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -1088,10 +1205,10 @@ static void handle_packet(struct conn* c, const unsigned char* p, long n)
 	switch (type)
 	{
 	case SSH_MSG_KEXINIT:
-		if (!handle_kexinit(c, p, n)) send_disconnect(c, 3, "key exchange failed");
+		if (!handle_kexinit(c, p, n)) { log_only("%s: key exchange failed", c->peer); send_disconnect(c, 3, "key exchange failed"); }
 		break;
 	case SSH_MSG_KEX_ECDH_INIT:
-		if (!c->in_kex || !handle_ecdh_init(c, p, n)) send_disconnect(c, 3, "key exchange failed");
+		if (!c->in_kex || !handle_ecdh_init(c, p, n)) { log_only("%s: key exchange failed", c->peer); send_disconnect(c, 3, "key exchange failed"); }
 		break;
 	case SSH_MSG_NEWKEYS:
 		if (!c->have_next) { send_disconnect(c, 2, "unexpected NEWKEYS"); break; }
@@ -1251,13 +1368,14 @@ static void run_connection(struct conn* c)
 		/* not logged in within two minutes: give up */
 		if (!c->authed && TickCount() - start > 60L * 120)
 		{
+			log_only("%s: no login within two minutes, disconnected", c->peer);
 			send_disconnect(c, 2, "login timed out");
 			break;
 		}
 		if (!net_poll(c)) break;
 		while ((n = take_packet(c)) != 0)
 		{
-			if (n < 0) { send_disconnect(c, 2, "bad packet"); break; }
+			if (n < 0) { log_only("%s: bad packet, disconnected", c->peer); send_disconnect(c, 2, "bad packet"); break; }
 			handle_packet(c, c->pkt, n);
 			idle = 0;
 			if (!c->alive) break;
@@ -1441,6 +1559,8 @@ int sshd_start(int idx, unsigned short port)
 	hostkey_fingerprint(fp, sizeof fp);
 	printf_s(idx, "sshd: host key ECDSA %s\r\n", fp);
 	printf_s(idx, "sshd: keys allowed from ~/.ssh/authorized_keys; no passwords\r\n");
+	printf_s(idx, "sshd: log in ~/.sshd/logs/sshd.log\r\n");
+	log_only("starting on port %d, host key ECDSA %s", (int)port, fp);
 	return 1;
 }
 
