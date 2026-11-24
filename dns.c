@@ -26,6 +26,16 @@ struct dns_job
 };
 static struct dns_job jobs[MAX_SESSIONS];
 
+/* a query ID that is hard to guess (microsecond clock mixed with a counter) */
+static unsigned short dns_new_id(void)
+{
+	static unsigned long counter = 0x5A17;
+	UnsignedWide t;
+	Microseconds(&t);
+	counter = counter * 1103515245UL + 12345UL + t.lo + (t.lo >> 16) + TickCount();
+	return (unsigned short)((counter >> 16) ^ t.lo);
+}
+
 static int default_server(char* out, int size)
 {
 	InetInterfaceInfo info;
@@ -79,7 +89,10 @@ static long dns_exchange(int idx, InetHost server, const unsigned char* q, long 
 			if (r == kOTNoDataErr) { YieldToAnyThread(); continue; }
 			if (r == kOTLookErr) { if (OTLook(ep) == T_UDERR) OTRcvUDErr(ep, NULL); continue; }
 			if (r != noErr) { YieldToAnyThread(); continue; }
-			if (ud.udata.len >= 12 && reply[0] == q[0] && reply[1] == q[1])
+			/* only the server we asked, from port 53, answering our ID,
+			   and only a response (QR bit set) */
+			if (ud.udata.len >= 12 && reply[0] == q[0] && reply[1] == q[1] &&
+			    (reply[2] & 0x80) && from.fHost == server && from.fPort == 53)
 			{
 				Microseconds(&t1);
 				*ms = (t1.lo - t0.lo) / 1000;
@@ -92,6 +105,86 @@ static long dns_exchange(int idx, InetHost server, const unsigned char* q, long 
 	OTUnbind(ep);
 	OTCloseProvider(ep);
 	return got;
+}
+
+/* Looks up a host name's IPv4 address for the other network commands, with
+   our own query to the control panel's DNS server, so the time it can take is
+   known (at most three tries of 3 seconds) and Ctrl+C (thread_command = EXIT)
+   stops it. A dotted address is converted without a lookup.
+   Returns 0 and sets *addr, or prints why not ("cmd: ...") and returns -1
+   (-3 if cancelled). */
+int dns_resolve(int idx, const char* cmd, const char* name, InetHost* addr)
+{
+	char server_s[64];
+	InetHost server;
+	unsigned char q[300];
+	unsigned char* reply = NULL;
+	struct dns_reply* r = NULL;
+	long qlen, n;
+	unsigned long ms;
+	int i, ret = -1, depth;
+	char qname[256];
+
+	if (OTInetStringToHost((char*)name, addr) == noErr)
+		return 0;
+	if (!default_server(server_s, sizeof server_s) || OTInetStringToHost(server_s, &server) != noErr)
+	{
+		printf_s(idx, "%s: no DNS server set in the TCP/IP control panel\r\n", cmd);
+		return -1;
+	}
+	reply = (unsigned char*)NewPtr(1500);
+	r = (struct dns_reply*)NewPtr(sizeof(struct dns_reply));
+	if (reply == NULL || r == NULL)
+	{
+		printf_s(idx, "%s: out of memory\r\n", cmd);
+		goto done;
+	}
+	snprintf(qname, sizeof qname, "%s", name);
+	for (depth = 0; depth < 4; depth++)                         /* follow CNAMEs */
+	{
+		int cname = 0;
+		qlen = dns_build_query(q, sizeof q, dns_new_id(), qname, DNS_A, 1);
+		if (qlen < 0)
+		{
+			printf_s(idx, "%s: invalid host name: %s\r\n", cmd, name);
+			goto done;
+		}
+		n = dns_exchange(idx, server, q, qlen, reply, 1500, &ms);
+		if (n == -3) { ret = -3; goto done; }
+		if (n < 0)
+		{
+			printf_s(idx, "%s: no answer from the DNS server (%s)\r\n", cmd, server_s);
+			goto done;
+		}
+		if (dns_parse_reply(reply, (int)n, r) != 0 || r->rcode != 0)
+		{
+			if (r->rcode == 3)
+				printf_s(idx, "%s: unknown host: %s\r\n", cmd, name);
+			else
+				printf_s(idx, "%s: can't look up %s\r\n", cmd, name);
+			goto done;
+		}
+		for (i = 0; i < r->count; i++)
+			if (r->rr[i].section == 1 && r->rr[i].type == DNS_A &&
+			    OTInetStringToHost(r->rr[i].data, addr) == noErr)
+			{
+				ret = 0;
+				goto done;
+			}
+		for (i = 0; i < r->count; i++)
+			if (r->rr[i].section == 1 && r->rr[i].type == DNS_CNAME)
+			{
+				snprintf(qname, sizeof qname, "%s", r->rr[i].data);
+				cname = 1;
+				break;
+			}
+		if (!cname) break;
+	}
+	printf_s(idx, "%s: unknown host: %s\r\n", cmd, name);
+done:
+	if (reply) DisposePtr((Ptr)reply);
+	if (r) DisposePtr((Ptr)r);
+	return ret;
 }
 
 static void print_rr(int idx, const struct dns_rr* rr, int short_out)
@@ -137,7 +230,7 @@ static void* dns_thread(void* arg)
 	else
 		snprintf(qname, sizeof qname, "%s", j->name);
 
-	qlen = dns_build_query(q, sizeof q, (unsigned short)(TickCount() ^ (idx << 12)), qname, j->type, 1);
+	qlen = dns_build_query(q, sizeof q, dns_new_id(), qname, j->type, 1);
 	if (qlen < 0)
 	{
 		printf_s(idx, "%s: invalid name: %s\r\n", j->is_dig ? "dig" : "nslookup", qname);

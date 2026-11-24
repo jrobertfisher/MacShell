@@ -15,7 +15,8 @@ struct dns_rr
 	char name[256];
 	unsigned short type, cls;
 	unsigned long ttl;
-	char data[400];                 /* the record's data as text, as dig shows it */
+	char data[600];                 /* the record's data as text, as dig shows it (an SOA with two
+	                                   255-character names and five numbers fits) */
 	int section;                    /* 1 answer, 2 authority, 3 additional */
 };
 
