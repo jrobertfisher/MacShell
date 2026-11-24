@@ -1,58 +1,49 @@
 MacShell
 ========
-An SSH client and Unix-style shell for classic Mac OS 7, 8 and 9 on 68k Macs.
-
-MacShell is a fork of [SevenTTY](https://github.com/LXXero/SevenTTY) by LXXero, which is itself a
-fork of [ssheven](https://github.com/cy384/ssheven) by cy384. It aims to be a clean, plain terminal
-with current security libraries and the everyday command-line tools you know from Linux and macOS.
+A Unix-style shell for classic Mac OS 7, 8 and 9 on 68k Macs, with an SSH client and server,
+file transfer, network tools and the everyday command-line tools you know from Linux and macOS.
 
 ![MacShell icons](docs/icon-preview.png)
 
-What's different from SevenTTY
-------------------------------
-* **Current security libraries**: libssh2 from upstream (November 2026, includes the
-  Terrapin "strict key exchange" fix) and mbedTLS 3.6.7 LTS, built with unused features removed.
-* **Real randomness for SSH and TLS**: classic Mac OS has no random number source, so MacShell
-  gathers its own (see [Randomness](#randomness)) and refuses to make a secure connection until it
-  has at least 256 bits.
-* **A clean look**: white text on black by default, a plain prompt, plain `ls`. Colour text from
-  programs (for example `ls --color` on a server) still works.
-* **SSH keys made on the Mac** (`ssh-keygen`, kept in `~/.ssh`), used automatically by `ssh
-  user@host` and `scp`.
-* **An SSH server** (`sshd start`): log in to MacShell from another computer with a key, with a
-  log in `~/.sshd/logs`.
-* **Unix-style paths**: `/Macintosh HD/Documents`, `~`, `/` for the list of disks, `cd -`.
-* **An interactive FTP client** with active and passive modes.
-* **Mac files survive transfers**: files with a resource fork are sent as MacBinary, and MacBinary
-  downloads are unpacked.
-* **Real network tools**: ICMP `ping` and `traceroute`, `dig` and `nslookup` with their own DNS
-  queries, and `curl` alongside `wget`.
-* **Manual pages** for every command, and a test suite that runs every command on a Mac.
-* **A new icon**, an original design.
+What it does
+------------
+* **A real shell.** 95 commands with Unix-style paths (`/Macintosh HD/Documents`, `~`, `..`,
+  `cd -`, `/` for the list of disks), tab completion, history, wildcards, `;` and `&&`, `>` and
+  `>>`, and an exit status for every command. Every command has a manual page (`man ls`,
+  `ls --help`, `man -k word`).
+* **SSH both ways.** Log in to other computers with `ssh user@host`, using a key made on the Mac
+  with `ssh-keygen`, or a password. Copy files with `scp`. Run `sshd start` and other computers
+  can log in to the Mac with a key, for an interactive shell or a single command.
+* **File transfer that keeps Mac files whole.** An interactive FTP client (`ftp host`, passive or
+  active), `wget` and `curl` for the web, and `scp`. Files with a resource fork, such as
+  applications, are sent as MacBinary, and MacBinary downloads are unpacked.
+* **Real network tools.** ICMP `ping` and `traceroute`, `dig` and `nslookup` that send their own
+  DNS queries, `host`, `ifconfig`, `nc` and `telnet`.
+* **Mac file tools.** View and change type and creator codes, Finder labels, locked and invisible
+  flags, and aliases; convert between Mac, Unix and DOS line endings.
+* **Current security.** libssh2 and mbedTLS 3.6 LTS, including the Terrapin "strict key exchange"
+  fix, with randomness gathered from the Mac's sound input and clock jitter and checked by health
+  tests (see [Randomness](#randomness)).
+* **A clean terminal.** White on black by default, with other colour schemes; 256 colours and true
+  colour for programs that use them; windows and tabs; scrollback; copy and paste.
 
-Features
+Commands
 --------
-* **SSH client**: key login (ECDSA P-256 or RSA) or password, known hosts checking. `ssh
-  user@host` connects straight away with your key; `ssh` alone or Cmd+K opens the Connect dialog.
-* **Local shell** with 95 commands, tab completion and history (up/down arrows):
-  * Files: `ls`, `cd`, `pwd`, `cat`, `less`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `touch`, `ln`,
-    `readlink`, `realpath`, `basename`, `dirname`, `which`, `head`, `tail` (including `-f`), `file`
-  * Text: `grep`, `wc`, `cut`, `nl`, `fold`, `rev`, `rot13`, `strings`, `echo`, `seq`, `dos2unix`,
-    `unix2dos`, `mac2unix`, `unix2mac`
-  * Bytes and checksums: `hexdump`, `xxd`, `cmp`, `md5sum`, `sha1sum`, `sha256sum`, `sha512sum`, `crc32`
-  * System: `ps`, `free`, `df`, `uname`, `uptime`, `date`, `cal`, `hostname`, `history`, `sleep`,
-    `clear`, `colors`, `entropy`
-  * Mac-specific: `getinfo`, `settype`, `setcreator`, `fixtype`, `chattr`, `chmod`, `chown`, `label`, `open`
-  * Network: `ssh`, `ssh-keygen`, `sshd`, `scp`, `ftp`, `wget`, `curl`, `telnet`, `nc`, `ping`,
-    `traceroute`, `host`, `dig`, `nslookup`, `ifconfig`
-* **Help**: `help` lists the commands; `man <command>` (or `<command> --help`) shows a manual
-  page for each, `man macshell` explains paths and keys, and `man -k <word>` searches. The pages
-  are plain text in `man/`, built into the application.
-* **Command lines**: `;` and `&&` to run several commands, `>` and `>>` to save output, and an
-  exit status for each command (used by `&&` and returned over SSH).
-* **Windows and tabs**: Cmd+N opens a window; Cmd+T opens a shell tab, Cmd+S an SSH tab.
-* **Terminal**: xterm-256color with 256 colours and true colour, bold, italic, underline, reverse
-  video, a symbol font for box drawing, 100 lines of scrollback per tab, copy and paste.
+* **Files:** `ls`, `cd`, `pwd`, `cat`, `less`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `touch`, `ln`,
+  `readlink`, `realpath`, `basename`, `dirname`, `which`, `head`, `tail` (including `-f`), `file`
+* **Text:** `grep`, `wc`, `cut`, `nl`, `fold`, `rev`, `rot13`, `strings`, `echo`, `seq`,
+  `dos2unix`, `unix2dos`, `mac2unix`, `unix2mac`
+* **Bytes and checksums:** `hexdump`, `xxd`, `cmp`, `md5sum`, `sha1sum`, `sha256sum`, `sha512sum`,
+  `crc32`
+* **Mac files:** `getinfo`, `settype`, `setcreator`, `chown`, `fixtype`, `chmod`, `chattr`,
+  `label`, `open`
+* **System:** `ps`, `free`, `df`, `uname`, `uptime`, `date`, `cal`, `hostname`, `history`,
+  `sleep`, `clear`, `colors`, `entropy`
+* **Network:** `ssh`, `ssh-keygen`, `sshd`, `scp`, `ftp`, `wget`, `curl`, `telnet`, `nc`, `ping`,
+  `traceroute`, `host`, `dig`, `nslookup`, `ifconfig`
+* **Help:** `help`, `man`
+
+Windows and tabs: Cmd+N opens a window, Cmd+T a shell tab and Cmd+S an SSH tab.
 
 Requirements
 ------------
@@ -63,7 +54,7 @@ Requirements
 
 MacShell is developed and tested in emulated Mac OS 9 (QEMU), where the test suite passes. It is
 meant for a Macintosh LC with a 68030 accelerator running System 7.5.3, but hasn't been tested on
-that hardware yet. The source still has SevenTTY's PowerPC build, but it hasn't been built or
+that hardware yet. The source also has a PowerPC build, but it hasn't been built or
 tested since the changes above.
 
 Randomness
@@ -214,9 +205,9 @@ an FPU.
 
 To change the icon, edit and run `tools/make_icons.py icons.r docs/icon-preview.png`.
 
-License
--------
+License and credits
+-------------------
 BSD 2-Clause; see `LICENSE`.
 
-Based on [SevenTTY](https://github.com/LXXero/SevenTTY) by LXXero and
+MacShell grew out of [SevenTTY](https://github.com/LXXero/SevenTTY) by LXXero, which is based on
 [ssheven](https://github.com/cy384/ssheven) by cy384.
