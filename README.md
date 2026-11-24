@@ -18,12 +18,14 @@ What it does
   key exchange, AES-GCM or AES-CTR encryption with HMAC-SHA-256/512 (encrypt-then-MAC), ECDSA and
   RSA (SHA-2) keys, and strict key exchange against the Terrapin attack (the server uses ECDH
   P-256, AES-128-CTR and HMAC-SHA-256). HTTPS uses TLS 1.2. It is
-  built on current libssh2 and mbedTLS 3.6 LTS, with randomness gathered from the Mac's sound input
-  and clock jitter and checked by health tests (see [Randomness](#randomness)).
+  built on current libssh2 and mbedTLS 3.6 LTS. The keys' randomness comes from the Mac's sound
+  input and clock jitter, checked by health tests, plus a seed saved from the last run; if that
+  isn't enough, MacShell asks you to move the mouse and type a few keys (see
+  [Randomness](#randomness)).
 * **File transfer that keeps Mac files whole.** An interactive FTP client (`ftp host`, passive or
   active), `wget` and `curl` for the web, and `scp`. Files with a resource fork, such as
   applications, are sent as MacBinary, and MacBinary downloads are unpacked.
-* **Real network tools.** ICMP `ping` and `traceroute`, `dig` and `nslookup` that send their own
+* **Standard network tools.** ICMP `ping` and `traceroute`, `dig` and `nslookup` that send their own
   DNS queries, `host`, `ifconfig`, `nc` and `telnet`.
 * **Mac file tools.** View and change type and creator codes, Finder labels, locked and invisible
   flags, and aliases; convert between Mac, Unix and DOS line endings.
