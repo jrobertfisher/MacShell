@@ -26,7 +26,7 @@ What it does
   active), `wget` and `curl` for the web, and `scp`. Files with a resource fork, such as
   applications, are sent as MacBinary, and MacBinary downloads are unpacked.
 * **Standard network tools.** ICMP `ping` and `traceroute`, `dig` and `nslookup` that send their own
-  DNS queries, `host`, `ifconfig`, `nc` and `telnet`.
+  DNS queries, `host`, `hostname`, `ifconfig`, `nc` and `telnet`.
 * **Mac file tools.** View and change type and creator codes, Finder labels, locked and invisible
   flags, and aliases; convert between Mac, Unix and DOS line endings.
 * **A clean terminal.** White on black by default, with other colour schemes; 256 colours and true
