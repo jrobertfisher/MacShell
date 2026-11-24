@@ -5,6 +5,25 @@ file transfer, network tools and the everyday command-line tools you know from L
 
 ![MacShell running ifconfig and nslookup in Mac OS 9](docs/screenshot.png)
 
+Requirements
+------------
+* **CPU**: 68020 or later (a 68030 or faster is recommended for SSH)
+* **RAM**: 3 MB for MacShell
+* **System**: 7.1 or later (before 7.5, the Thread Manager extension is needed)
+* **Network**: Open Transport for SSH, FTP, wget and curl. The local shell works without it.
+
+MacShell is developed and tested in emulated Mac OS 9 (QEMU), where the test suite passes. It is
+meant for a Macintosh LC with a 68030 accelerator running System 7.5.3, but hasn't been tested on
+that hardware yet. The source also has a PowerPC build, which hasn't been built or
+tested yet.
+
+Download
+--------
+Download `MacShell.bin` from the [latest release](https://github.com/jrobertfisher/MacShell/releases/latest).
+It is a MacBinary file, which keeps the application in one piece on the way: Mac FTP and web
+programs (Fetch, Transmit) and StuffIt Expander turn it into the MacShell application, and so does
+MacShell's own `ftp get` or `wget`. Give MacShell at least 3 MB of memory (the default).
+
 What it does
 ------------
 * **A real shell.** 95 commands with Unix-style paths (`/Macintosh HD/Documents`, `~`, `..`,
@@ -49,18 +68,6 @@ Commands
 * **Help:** `help`, `man`
 
 Windows and tabs: Cmd+N opens a window, Cmd+T a shell tab and Cmd+S an SSH tab.
-
-Requirements
-------------
-* **CPU**: 68020 or later (a 68030 or faster is recommended for SSH)
-* **RAM**: 3 MB for MacShell
-* **System**: 7.1 or later (before 7.5, the Thread Manager extension is needed)
-* **Network**: Open Transport for SSH, FTP, wget and curl. The local shell works without it.
-
-MacShell is developed and tested in emulated Mac OS 9 (QEMU), where the test suite passes. It is
-meant for a Macintosh LC with a 68030 accelerator running System 7.5.3, but hasn't been tested on
-that hardware yet. The source also has a PowerPC build, which hasn't been built or
-tested yet.
 
 Randomness
 ----------
