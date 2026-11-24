@@ -4132,11 +4132,94 @@ static void cmd_head(int idx, int argc, char** argv)
 	FSClose(refNum);
 }
 
+/* tail -f: print what's added to the file, until Ctrl+C */
+static void* tail_follow_thread(void* arg)
+{
+	int idx = (int)(long)arg;
+	struct session* s = &sessions[idx];
+	unsigned long next = 0;
+	int last_cr = 0;
+
+	while (s->in_use && s->thread_command != EXIT)
+	{
+		short ref;
+		long eof;
+		if (TickCount() < next) { YieldToAnyThread(); continue; }
+		next = TickCount() + 30;                                /* twice a second */
+		if (FSpOpenDF(&s->tail_spec, fsRdPerm, &ref) != noErr) continue;
+		GetEOF(ref, &eof);
+		if (eof < s->tail_pos)
+		{
+			vt_write(idx, "tail: file truncated or replaced\r\n");
+			s->tail_pos = 0;
+		}
+		if (eof > s->tail_pos)
+		{
+			unsigned char buf[512];
+			SetFPos(ref, fsFromStart, s->tail_pos);
+			while (s->tail_pos < eof)
+			{
+				long n = eof - s->tail_pos, i;
+				if (n > (long)sizeof buf) n = sizeof buf;
+				if (FSRead(ref, &n, buf) != noErr && n == 0) break;
+				for (i = 0; i < n; i++)
+				{
+					unsigned char c = buf[i];
+					if (c == '\r') { vt_write(idx, "\r\n"); last_cr = 1; }
+					else if (c == '\n') { if (!last_cr) vt_write(idx, "\r\n"); last_cr = 0; }
+					else { vt_char(idx, c); last_cr = 0; }
+				}
+				s->tail_pos += n;
+			}
+		}
+		FSClose(ref);
+	}
+
+	s->worker_mode = WORKER_NONE;
+	s->thread_state = DONE;
+	s->thread_command = WAIT;
+	if (s->in_use && s->type == SESSION_LOCAL)
+		shell_prompt(idx);
+	return 0;
+}
+
+static void tail_follow_start(int idx, FSSpec* spec, long pos)
+{
+	struct session* s = &sessions[idx];
+	ThreadID tid = kNoThreadID;
+	OSErr err;
+
+	if (s->sshd_exec)
+	{
+		vt_write(idx, "tail: -f needs an interactive session (ssh without a command)\r\n");
+		return;
+	}
+	s->tail_spec = *spec;
+	s->tail_pos = pos;
+	if (s->thread_state == DONE && s->thread_id != kNoThreadID)
+		session_reap_thread(idx, 0);
+	s->thread_command = READ;
+	s->thread_state = OPEN;
+	err = NewThread(kCooperativeThread, tail_follow_thread, (void*)(long)idx,
+	                THREAD_STACK_WORKER, kCreateIfNeeded, NULL, &tid);
+	if (err != noErr)
+	{
+		s->thread_command = WAIT;
+		s->thread_state = DONE;
+		s->thread_id = kNoThreadID;
+		printf_s(idx, "tail: cannot follow (err=%d)\r\n", (int)err);
+		return;
+	}
+	s->thread_id = tid;
+	s->worker_mode = WORKER_TAIL;
+}
+
 static void cmd_tail(int idx, int argc, char** argv)
 {
 	int num_lines = 10;
 	const char* filename = NULL;
 	int argi;
+	int follow = 0;
 	FSSpec spec;
 	OSErr e;
 	short refNum;
@@ -4155,6 +4238,13 @@ static void cmd_tail(int idx, int argc, char** argv)
 			num_lines = atoi(&argv[argi][1]);
 		else if (strcmp(argv[argi], "-n") == 0 && argi + 1 < argc)
 			num_lines = atoi(argv[++argi]);
+		else if (strcmp(argv[argi], "-f") == 0)
+			follow = 1;
+		else if (argv[argi][0] == '-' && argv[argi][1] != '\0')
+		{
+			printf_s(idx, "tail: unknown option %s\r\n", argv[argi]);
+			return;
+		}
 		else
 			filename = argv[argi];
 	}
@@ -4164,7 +4254,7 @@ static void cmd_tail(int idx, int argc, char** argv)
 
 	if (!filename)
 	{
-		vt_write(idx, "usage: tail [-n N] <file>\r\n");
+		vt_write(idx, "usage: tail [-f] [-n N] <file>\r\n");
 		return;
 	}
 
@@ -4236,6 +4326,7 @@ static void cmd_tail(int idx, int argc, char** argv)
 	if (num_lines == 0)
 	{
 		FSClose(refNum);
+		if (follow) tail_follow_start(idx, &spec, file_pos);
 		return;
 	}
 	{
@@ -4280,6 +4371,7 @@ static void cmd_tail(int idx, int argc, char** argv)
 	}
 
 	FSClose(refNum);
+	if (follow) tail_follow_start(idx, &spec, file_pos);
 	#undef TAIL_MAX
 }
 
