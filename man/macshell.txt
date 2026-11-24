@@ -27,6 +27,19 @@ DESCRIPTION
       command >> file   add the output to the end of file
     There are no pipes (|).
 
+    Several commands on one line
+      first ; second    run first, then second
+      first && second   run second only if first worked
+    Commands that work in the background (ping, wget, ftp...) finish
+    before the next one starts. Ctrl+C stops the command and the rest of
+    the line.
+
+    Exit status
+      Each command succeeds, or fails if it reports an error (usage
+      messages, "not found", "cannot open" and so on). && uses this, and
+      ssh user@mac 'command' passes it back: 0 worked, 1 error, 127
+      unknown command, 130 stopped with Ctrl+C.
+
     Running applications
       Type an application's path to open it: ./SimpleText or
       "/Macintosh HD/Applications/SimpleText". See open.

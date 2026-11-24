@@ -18,6 +18,8 @@ What's different from SevenTTY
 * **A clean look**: white text on black by default, a plain prompt, plain `ls`. Colour text from
   programs (for example `ls --color` on a server) still works.
 * **An interactive FTP client** with active and passive modes.
+* **An SSH server** (`sshd start`): log in to MacShell from another computer with a key, with a
+  log in `~/.sshd/logs`.
 * **`curl`** alongside `wget`.
 * **A new icon**, an original design.
 
@@ -34,6 +36,8 @@ Features
 * **Help**: `help` lists the commands; `man <command>` (or `<command> --help`) shows a manual
   page for each, `man macshell` explains paths and keys, and `man -k <word>` searches. The pages
   are plain text in `man/`, built into the application.
+* **Command lines**: `;` and `&&` to run several commands, `>` and `>>` to save output, and an
+  exit status for each command (used by `&&` and returned over SSH).
 * **Windows and tabs**: Cmd+N opens a window; Cmd+T opens a shell tab, Cmd+S an SSH tab.
 * **Terminal**: xterm-256color with 256 colours and true colour, bold, italic, underline, reverse
   video, a symbol font for box drawing, 100 lines of scrollback per tab, copy and paste.
