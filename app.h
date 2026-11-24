@@ -152,6 +152,10 @@ struct session
 	int sshd_owned;              /* this tab belongs to an incoming SSH connection */
 	int sshd_tap;                /* send its output to that connection */
 	int sshd_exec;               /* running one command for ssh: no paging */
+	int hidden;                  /* no window or terminal (one-off SSH command) */
+	int last_status;             /* 0 = the last command succeeded */
+	char cur_cmd[32];            /* the command running, for spotting its errors */
+	char pending_line[512];      /* the rest of a line with ; or && still to run */
 	int shell_has_prev;          /* cd -: the previous folder */
 	int shell_prev_at_root;
 	short shell_prev_vRefNum;
@@ -302,6 +306,10 @@ extern int ssh_skip_connect_dialog;
 
 /* set while creating a tab that shouldn't become the active one */
 extern int new_session_background;
+
+/* a shell session with no window, for one-off SSH commands */
+int new_hidden_session(void);
+void close_hidden_session(int idx);
 
 // session management
 int new_session(struct window_context* wc, enum SESSION_TYPE type);

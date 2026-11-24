@@ -1218,6 +1218,55 @@ static void adjust_window_for_tabs(struct window_context* wc, int tabs_appeared)
 
 int new_session_background = 0;
 
+/* A shell session with no window or terminal, for a command run over SSH
+   (ssh mac 'command'): its output goes only to the connection. */
+int new_hidden_session(void)
+{
+	int idx = -1, i;
+	for (i = 0; i < MAX_SESSIONS; i++)
+	{
+		if (!sessions[i].in_use && sessions[i].thread_state == DONE &&
+		    sessions[i].thread_id == kNoThreadID)
+		{
+			idx = i;
+			break;
+		}
+	}
+	if (idx < 0) return -1;
+	init_session(&sessions[idx]);
+	sessions[idx].in_use = 1;
+	sessions[idx].type = SESSION_LOCAL;
+	sessions[idx].hidden = 1;
+	snprintf(sessions[idx].tab_label, sizeof(sessions[idx].tab_label), "ssh command");
+	shell_init(idx);
+	return idx;
+}
+
+void close_hidden_session(int idx)
+{
+	struct session* s;
+	if (idx < 0 || idx >= MAX_SESSIONS) return;
+	s = &sessions[idx];
+	if (!s->in_use || !s->hidden) return;
+	sshd_session_closing(idx);
+	/* stop a background command; reap_detached_sessions() disposes of it */
+	if (s->thread_id != kNoThreadID)
+	{
+		if (s->thread_state == DONE)
+			session_reap_thread(idx, 0);
+		else
+		{
+			s->thread_command = EXIT;
+			if (s->endpoint != kOTInvalidEndpointRef)
+				OTCancelSynchronousCalls(s->endpoint, kOTCanceledErr);
+		}
+	}
+	if (s->thread_id == kNoThreadID)
+		s->thread_state = DONE;
+	s->hidden = 0;
+	s->in_use = 0;
+}
+
 int new_session(struct window_context* wc, enum SESSION_TYPE type)
 {
 	if (wc->num_sessions >= MAX_SESSIONS) return -1;
@@ -2135,11 +2184,13 @@ void event_loop(void)
 	{
 		// wait to get a GUI event
 		sshd_tick();
+		shell_tick();
 		while (!WaitNextEvent(everyEvent, &event,
 		                      (has_active_local_worker() || sshd_running()) ? 1 : sleep_time, NULL))
 		{
 			YieldToAnyThread();
 			sshd_tick();
+			shell_tick();
 			reap_detached_sessions();
 
 			// iterate all windows for idle tasks

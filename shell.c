@@ -111,7 +111,7 @@ static void vt_write_mr(int idx, const char* s, size_t len)
 	const unsigned char* p = (const unsigned char*)s;
 	VTerm* vt = sessions[idx].vterm;
 
-	if (!vt) return;
+	if (!vt && !sessions[idx].sshd_tap) return;
 
 	for (i = 0; i < len; i++)
 	{
@@ -141,12 +141,12 @@ static void vt_write_mr(int idx, const char* s, size_t len)
 		}
 		if (bi >= 508)
 		{
-			{ if (sessions[idx].sshd_tap) sshd_output(idx, buf, bi); vterm_input_write(vt, buf, bi); }
+			{ if (sessions[idx].sshd_tap) sshd_output(idx, buf, bi); if (vt) vterm_input_write(vt, buf, bi); }
 			bi = 0;
 		}
 	}
 	if (bi > 0)
-		{ if (sessions[idx].sshd_tap) sshd_output(idx, buf, bi); vterm_input_write(vt, buf, bi); }
+		{ if (sessions[idx].sshd_tap) sshd_output(idx, buf, bi); if (vt) vterm_input_write(vt, buf, bi); }
 }
 
 static void redir_write(int idx, const char* s, size_t len)
@@ -159,11 +159,42 @@ static void redir_write(int idx, const char* s, size_t len)
 	}
 }
 
+/* Exit status without changing 89 commands: an error message from the
+   running command ("cmd: cannot ...", "usage: ...") marks it as failed. */
+static const char* const error_words[] = {
+	"not found", "cannot", "can't", "failed", "fail", "no such", "error", "invalid",
+	"refused", "denied", "unknown", "not a ", "bad ", "timed out", "missing", "not available",
+	"too many", "already exists", "no manual page", "not running", "unreachable", "incomplete",
+	"cancelled", "unavailable", "busy", "no match", "nothing found", "not empty", "unexpected",
+	"must be", "zero increment", "could not", "unable", "no previous", NULL
+};
+
+void shell_note_output(int idx, const char* t)
+{
+	struct session* s = &sessions[idx];
+	int n = strlen(s->cur_cmd), i;
+	if (n == 0 || t == NULL) return;
+	if (strncmp(t, "usage:", 6) == 0) { s->last_status = 1; return; }
+	if (strncmp(t, s->cur_cmd, n) != 0 || t[n] != ':') return;
+	for (i = 0; error_words[i]; i++)
+	{
+		const char* w = error_words[i];
+		const char* p;
+		for (p = t + n; *p; p++)
+		{
+			int k = 0;
+			while (w[k] && tolower((unsigned char)p[k]) == w[k]) k++;
+			if (!w[k]) { s->last_status = 1; return; }
+		}
+	}
+}
+
 static void vt_write(int idx, const char* s)
 {
 	size_t len = strlen(s);
 	redir_write(idx, s, len);
-	if (!sessions[idx].redir_quiet && sessions[idx].vterm)
+	shell_note_output(idx, s);
+	if (!sessions[idx].redir_quiet && (sessions[idx].vterm || sessions[idx].sshd_tap))
 		vt_write_mr(idx, s, len);
 }
 
@@ -181,7 +212,7 @@ static void copy_cstr_trunc(char* dst, size_t dst_size, const char* src)
 static void vt_write_n(int idx, const char* s, size_t n)
 {
 	redir_write(idx, s, n);
-	if (!sessions[idx].redir_quiet && sessions[idx].vterm)
+	if (!sessions[idx].redir_quiet && (sessions[idx].vterm || sessions[idx].sshd_tap))
 		vt_write_mr(idx, s, n);
 }
 
@@ -190,10 +221,10 @@ static void vt_char(int idx, char c)
 	unsigned char uc = (unsigned char)c;
 	redir_write(idx, &c, 1);
 	if (sessions[idx].redir_quiet) return;
-	if (!sessions[idx].vterm) return;
+	if (!sessions[idx].vterm && !sessions[idx].sshd_tap) return;
 	if (uc < 0x80)
 	{
-		{ if (sessions[idx].sshd_tap) sshd_output(idx, &c, 1); vterm_input_write(sessions[idx].vterm, &c, 1); }
+		{ if (sessions[idx].sshd_tap) sshd_output(idx, &c, 1); if (sessions[idx].vterm) vterm_input_write(sessions[idx].vterm, &c, 1); }
 	}
 	else
 	{
@@ -218,7 +249,7 @@ static void vt_char(int idx, char c)
 			buf[2] = 0x80 | (cp & 0x3F);
 			len = 3;
 		}
-		{ if (sessions[idx].sshd_tap) sshd_output(idx, buf, len); vterm_input_write(sessions[idx].vterm, buf, len); }
+		{ if (sessions[idx].sshd_tap) sshd_output(idx, buf, len); if (sessions[idx].vterm) vterm_input_write(sessions[idx].vterm, buf, len); }
 	}
 }
 
@@ -9633,7 +9664,7 @@ int shell_is_busy(int idx)
 {
 	struct session* s = &sessions[idx];
 	if (!s->in_use) return 0;
-	return local_shell_worker_active(s) || s->ftp_mode != FTP_MODE_OFF ||
+	return local_shell_worker_active(s) || s->pending_line[0] || s->ftp_mode != FTP_MODE_OFF ||
 	       s->keygen_stage != 0 || s->hide_input || s->worker_mode == WORKER_NC;
 }
 
@@ -12187,18 +12218,106 @@ static void redir_close(int idx)
 static void ftp_interactive_line(int idx, char* line);
 static void keygen_line(int idx, char* line);
 
+/* Split off the first command of a line with ; or && (outside quotes).
+   first gets that command; returns a pointer to the rest (starting at the
+   operator: ";" or "&&"), or NULL if the line has no more. */
+static const char* split_chain(const char* line, char* first, int size)
+{
+	int q = 0, i, n = 0;
+	for (i = 0; line[i]; i++)
+	{
+		char c = line[i];
+		if (q) { if (c == q) q = 0; }
+		else if (c == '"' || c == '\'') q = c;
+		else if (c == '\\' && line[i + 1]) { if (n < size - 2) first[n++] = c; i++; c = line[i]; }
+		else if (c == ';' || (c == '&' && line[i + 1] == '&'))
+		{
+			first[n] = '\0';
+			return line + i;
+		}
+		if (n < size - 1) first[n++] = c;
+	}
+	first[n] = '\0';
+	return NULL;
+}
+
+static void shell_execute_one(int idx, char* line);
+
+/* run the queued commands of a ; / && line until one goes to the background */
+static void shell_run_chain(int idx)
+{
+	struct session* s = &sessions[idx];
+	while (s->in_use && s->pending_line[0] && !local_shell_worker_active(s) &&
+	       s->ftp_mode == FTP_MODE_OFF && s->keygen_stage == 0)
+	{
+		char cmd[256], rest[512];
+		const char* p = s->pending_line;
+		int and_op = 0;
+		const char* r;
+
+		if (p[0] == ';') p++;
+		else if (p[0] == '&' && p[1] == '&') { p += 2; and_op = 1; }
+		r = split_chain(p, cmd, sizeof cmd);
+		if (r) copy_cstr_trunc(rest, sizeof rest, r); else rest[0] = '\0';
+		copy_cstr_trunc(s->pending_line, sizeof s->pending_line, rest);
+		if (and_op && s->last_status != 0)
+			continue;                                       /* && after a failure: skip */
+		{
+			char* c = cmd;
+			while (*c == ' ' || *c == '\t') c++;
+			if (*c) shell_execute_one(idx, c);
+		}
+	}
+}
+
+/* called from the main loop: continue chains waiting on background commands */
+void shell_tick(void)
+{
+	int i;
+	for (i = 0; i < MAX_SESSIONS; i++)
+	{
+		struct session* s = &sessions[i];
+		if (!s->in_use || s->type != SESSION_LOCAL || !s->pending_line[0]) continue;
+		if (local_shell_worker_active(s) || s->thread_state == OPEN) continue;
+		shell_run_chain(i);
+		if (!s->pending_line[0] && !local_shell_worker_active(s))
+			shell_prompt(i);
+	}
+}
+
 static void shell_execute(int idx, char* line)
 {
-	if (sessions[idx].ftp_mode != FTP_MODE_OFF)
+	struct session* s = &sessions[idx];
+	char first[256];
+	const char* rest;
+
+	if (s->ftp_mode != FTP_MODE_OFF)
 	{
 		ftp_interactive_line(idx, line);
 		return;
 	}
-	if (sessions[idx].keygen_stage != 0)
+	if (s->keygen_stage != 0)
 	{
 		keygen_line(idx, line);
 		return;
 	}
+	rest = split_chain(line, first, sizeof first);
+	if (rest == NULL)
+	{
+		shell_execute_one(idx, line);
+		return;
+	}
+	copy_cstr_trunc(s->pending_line, sizeof s->pending_line, rest);
+	{
+		char* c = first;
+		while (*c == ' ' || *c == '\t') c++;
+		if (*c) shell_execute_one(idx, c);
+	}
+	shell_run_chain(idx);
+}
+
+static void shell_execute_one(int idx, char* line)
+{
 	char line_copy[256];
 	char* redir_file = NULL;
 	int redir_append = 0;
@@ -12211,6 +12330,8 @@ static void shell_execute(int idx, char* line)
 	int argc = parse_args(line_copy, argv, MAX_ARGS);
 
 	if (argc == 0) return;
+	sessions[idx].last_status = 0;
+	copy_cstr_trunc(sessions[idx].cur_cmd, sizeof sessions[idx].cur_cmd, argv[0]);
 
 	/* scan for > or >> redirection */
 	for (i = 1; i < argc; i++)
@@ -12339,6 +12460,8 @@ static void shell_execute(int idx, char* line)
 	{
 		{
 			struct window_context* wc = window_for_session(idx);
+			if (sessions[idx].hidden)
+				return;                                 /* ssh mac 'exit': the command just ends */
 			if (wc && wc->num_sessions > 1)
 				close_session(idx);
 			else if (wc && num_windows > 1)
@@ -12366,6 +12489,7 @@ static void shell_execute(int idx, char* line)
 		{
 			vt_write(idx, cmd);
 			vt_write(idx, ": command not found (type 'help')\r\n");
+			sessions[idx].last_status = 127;
 		}
 	}
 
@@ -12384,6 +12508,10 @@ void shell_prompt(int idx)
 	char dirname[256];
 	char esc[20];
 	int c = prefs.prompt_color;
+
+	/* the rest of a ; / && line is still to run */
+	if (s->pending_line[0])
+		return;
 
 	/* a one-off command run for ssh: no prompt when it finishes */
 	if (s->sshd_exec && s->keygen_stage == 0 && s->ftp_mode == FTP_MODE_OFF)
@@ -12623,6 +12751,8 @@ void shell_input(int session_idx, unsigned char c, int modifiers, unsigned char 
 			if (s->endpoint != kOTInvalidEndpointRef)
 				OTCancelSynchronousCalls(s->endpoint, kOTCanceledErr);
 			vt_write(session_idx, "^C\r\n");
+			s->last_status = 130;
+			s->pending_line[0] = '\0';                  /* Ctrl+C ends the whole line */
 		}
 		return;
 	}

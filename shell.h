@@ -18,3 +18,5 @@ int ssh_key_folder(short* vRefNum, long* dirID, int create);
 /* for the SSH server */
 void shell_run_line(int idx, char* line);
 int shell_is_busy(int idx);
+void shell_tick(void);
+void shell_note_output(int idx, const char* t);

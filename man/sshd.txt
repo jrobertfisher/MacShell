@@ -15,8 +15,7 @@ DESCRIPTION
     Logins use keys only, never passwords: the public key must be a line
     in ~/.ssh/authorized_keys on this Mac (ECDSA P-256 or RSA of 2048
     bits or more). Ed25519 keys aren't supported. One connection at a
-    time; each opens its own MacShell tab in the background (your tab
-    stays in front), which closes when the other computer logs out. A command given to ssh runs and returns:
+XX
         ssh user@mac 'ls -l'
 
     The first start makes this Mac's host key (ECDSA P-256), kept in
@@ -26,9 +25,15 @@ DESCRIPTION
     Everything the server does is logged with the date and time in
     ~/.sshd/logs/sshd.log: starts and stops, connections, logins (with
     the key's fingerprint), rejected keys, commands run and disconnects.
-    What is typed and shown during a session isn't logged. At 256 KB
-    the log becomes sshd.log.1. tail ~/.sshd/logs/sshd.log shows the
-    latest entries.
+    What is typed and shown during a session isn't logged. The log can't
+    fill the disk: at 256 KB it becomes sshd.log.1 (replacing the older
+    one), so it never takes more than 512 KB, and logging pauses while
+    the startup disk has less than 1 MB free. sshd status shows its size;
+    tail -f ~/.sshd/logs/sshd.log follows it.
+
+    A command run with ssh user@mac 'command' runs without a tab, and its
+    exit status goes back to ssh: 0 if it worked, 1 if it reported an
+    error, 127 for an unknown command, 130 if stopped with Ctrl+C.
 
     Security: ECDH P-256 key exchange with strict key exchange (against
     the Terrapin attack), AES-128-CTR with HMAC-SHA-256 (encrypt then

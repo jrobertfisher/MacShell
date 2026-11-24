@@ -137,6 +137,7 @@ struct conn
 	/* shared with the main thread (cooperative threads, so no locking) */
 	int session_idx;                    /* MacShell tab, -1 = none yet */
 	int session_failed, exec_started, exec_done, shell_closed;
+	int exit_status;
 	char outq[OUTQ_SIZE];
 	long outq_len;
 	unsigned char inq[INQ_SIZE];
@@ -190,6 +191,18 @@ static int log_folder(short vref, long parent, const char* name, long* dir)
 /* Append a line to ~/.sshd/logs/sshd.log (Documents:.sshd:logs on the
    startup disk), with the date and time. At 256 KB it becomes sshd.log.1. */
 #define LOG_MAX 262144L
+#define LOG_MIN_FREE 1048576L           /* stop logging below 1 MB free */
+static int g_log_paused = 0;
+
+static long disk_free_bytes(short vref)
+{
+	HParamBlockRec pb;
+	memset(&pb, 0, sizeof pb);
+	pb.volumeParam.ioVRefNum = vref;
+	if (PBHGetVInfoSync(&pb) != noErr) return 0x7FFFFFFFL;
+	return (long)(unsigned short)pb.volumeParam.ioVFrBlk * (long)pb.volumeParam.ioVAlBlkSiz;
+}
+
 static void log_line(const char* text)
 {
 	short vref, ref;
@@ -201,6 +214,26 @@ static void log_line(const char* text)
 	int i, k;
 
 	if (FindFolder(kOnSystemDisk, kSystemFolderType, kDontCreateFolder, &vref, &sys) != noErr) return;
+
+	/* never fill the disk: pause below 1 MB free (noting it once) */
+	{
+		long free_b = disk_free_bytes(vref);
+		if (free_b < LOG_MIN_FREE)
+		{
+			if (g_log_paused) return;
+			g_log_paused = 1;
+			text = "log paused: less than 1 MB free on the startup disk";
+			if (g_msg_idx >= 0 && sessions[g_msg_idx].in_use)
+				printf_s(g_msg_idx, "sshd: %s\r\n", text);
+			if (free_b < 4096) return;
+		}
+		else if (g_log_paused)
+		{
+			g_log_paused = 0;
+			log_line("log resumed: disk space is available again");
+		}
+	}
+
 	if (!log_folder(vref, fsRtDirID, "Documents", &docs) ||
 	    !log_folder(vref, docs, ".sshd", &sshd_dir) ||
 	    !log_folder(vref, sshd_dir, "logs", &logs))
@@ -1388,7 +1421,7 @@ static void run_connection(struct conn* c)
 		if (c->chan_open && !c->close_sent &&
 		    (c->exec_done || c->shell_closed || c->session_failed) && c->outq_len == 0)
 		{
-			close_channel(c, c->session_failed ? 1 : 0);
+			close_channel(c, c->session_failed ? 1 : c->exit_status);
 			idle = 0;
 		}
 		if (idle) YieldToAnyThread();
@@ -1588,6 +1621,31 @@ void sshd_status(int idx)
 	hostkey_fingerprint(fp, sizeof fp);
 	printf_s(idx, "sshd: listening on port %d, %ld connection(s) so far\r\n", (int)g_port, g_connections);
 	printf_s(idx, "sshd: host key ECDSA %s\r\n", fp);
+	{
+		/* the log's size (sshd.log plus the rolled-over sshd.log.1) */
+		short vref;
+		long sys, docs, sd, logs, total = 0;
+		if (FindFolder(kOnSystemDisk, kSystemFolderType, kDontCreateFolder, &vref, &sys) == noErr &&
+		    log_folder(vref, fsRtDirID, "Documents", &docs) && log_folder(vref, docs, ".sshd", &sd) &&
+		    log_folder(vref, sd, "logs", &logs))
+		{
+			const unsigned char* names[2];
+			int i;
+			names[0] = "\psshd.log";
+			names[1] = "\psshd.log.1";
+			for (i = 0; i < 2; i++)
+			{
+				CInfoPBRec pb;
+				memset(&pb, 0, sizeof pb);
+				pb.hFileInfo.ioNamePtr = (StringPtr)names[i];
+				pb.hFileInfo.ioVRefNum = vref;
+				pb.hFileInfo.ioDirID = logs;
+				if (PBGetCatInfoSync(&pb) == noErr) total += pb.hFileInfo.ioFlLgLen;
+			}
+		}
+		printf_s(idx, "sshd: log ~/.sshd/logs/sshd.log, %ld KB of at most 512 KB%s\r\n",
+		         total / 1024, g_log_paused ? " (paused: disk almost full)" : "");
+	}
 	if (g_conn)
 		printf_s(idx, "sshd: %s connected%s%s\r\n", g_conn->peer,
 		         g_conn->authed ? " as " : " (logging in)", g_conn->authed ? g_conn->user : "");
@@ -1707,7 +1765,9 @@ void sshd_tick(void)
 		if (c->session_idx >= 0)
 		{
 			idx = c->session_idx;
-			if (sessions[idx].in_use && sessions[idx].sshd_owned)
+			if (sessions[idx].in_use && sessions[idx].hidden)
+				close_hidden_session(idx);
+			else if (sessions[idx].in_use && sessions[idx].sshd_owned)
 				close_session(idx);
 			if (sessions[idx].in_use)                       /* last tab in its window */
 			{
@@ -1724,9 +1784,14 @@ void sshd_tick(void)
 	{
 		struct window_context* wc = &windows[active_window];
 		g_claim_pending = 1;
-		new_session_background = 1;                     /* don't take over the user's tab */
-		idx = new_session(wc, SESSION_LOCAL);
-		new_session_background = 0;
+		if (c->want_session == 2)
+			idx = new_hidden_session();                 /* ssh mac 'command': no tab */
+		else
+		{
+			new_session_background = 1;                 /* don't take over the user's tab */
+			idx = new_session(wc, SESSION_LOCAL);
+			new_session_background = 0;
+		}
 		g_claim_pending = 0;
 		if (idx < 0 || c->session_idx != idx)
 		{
@@ -1758,5 +1823,10 @@ void sshd_tick(void)
 
 	/* a command finished (including background work like wget or ping) */
 	if (c->exec_started && !c->exec_done && c->session_idx == idx && !shell_is_busy(idx))
+	{
+		c->exit_status = sessions[idx].last_status;
+		log_only("  finished, exit status %d", c->exit_status);
 		c->exec_done = 1;
+		close_hidden_session(idx);                      /* its output is already queued */
+	}
 }

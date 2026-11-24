@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include "app.h"
 #include "sshd.h"
+#include "shell.h"
 #include "console.h"
 #include "net.h"
 #include "telnet.h"
@@ -1731,7 +1732,7 @@ void printf_s(int session_idx, const char* str, ...)
 	va_list args;
 	struct session* s = &sessions[session_idx];
 
-	if (s->vterm == NULL) return;
+	if (s->vterm == NULL && !s->sshd_tap) return;
 
 	va_start(args, str);
 	len = vsnprintf(buf, sizeof(buf), str, args);
@@ -1748,10 +1749,12 @@ void printf_s(int session_idx, const char* str, ...)
 	}
 
 	/* write to terminal (unless quiet redirect) */
+	if (s->type == SESSION_LOCAL)
+		shell_note_output(session_idx, buf);
 	if (!s->redir_quiet)
 	{
 		if (s->sshd_tap) sshd_output(session_idx, buf, len);
-		vterm_input_write(s->vterm, buf, len);
+		if (s->vterm) vterm_input_write(s->vterm, buf, len);
 	}
 }
 
