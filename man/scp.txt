@@ -21,8 +21,8 @@ OPTIONS
     -n        don't show the progress line
 
 EXAMPLES
-    scp me@192.168.1.20:notes.txt
-    scp MacNTP me@192.168.1.20:/home/me/
+    scp me@server.example.com:notes.txt
+    scp MacNTP me@server.example.com:/home/me/
 
 SEE ALSO
     ssh, ftp
