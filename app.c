@@ -16,6 +16,8 @@
 
 #include <Threads.h>
 #include <MacMemory.h>
+#include <AppleEvents.h>
+#include <Gestalt.h>
 #include <Quickdraw.h>
 #include <Fonts.h>
 #include <Windows.h>
@@ -1077,6 +1079,11 @@ void init_session(struct session* s)
 	s->shell_line_len = 0;
 	s->shell_cursor_pos = 0;
 	s->shell_history = NULL;
+	s->more_active = 0;
+	s->more_lines = NULL;
+	s->more_own_text = NULL;
+	s->more_own_lines = 0;
+	s->xfer_buf = NULL;
 	s->wget_url[0] = '\0';
 	s->wget_no_progress = 0;
 	s->scp_user[0] = '\0';
@@ -1460,6 +1467,7 @@ void close_session(int idx)
 		DisposePtr((Ptr)sessions[idx].shell_history);
 		sessions[idx].shell_history = NULL;
 	}
+	shell_free_session(idx);
 
 	sessions[idx].in_use = 0;
 	remove_session_from_window(wc, idx);
@@ -2116,6 +2124,7 @@ static void reap_detached_sessions(void)
 				DisposePtr((Ptr)s->shell_history);
 				s->shell_history = NULL;
 			}
+			shell_free_session(s - sessions);
 		}
 	}
 }
@@ -2249,6 +2258,10 @@ void event_loop(void)
 		// handle any GUI events
 		switch (event.what)
 		{
+			case kHighLevelEvent:
+				AEProcessAppleEvent(&event);
+				break;
+
 			case updateEvt:
 				eventWin = (WindowPtr)event.message;
 				{
@@ -2873,7 +2886,8 @@ int intro_dialog(void)
 	// only show hostname part (before the :port suffix) in the dialog
 	{
 		Str255 host_only;
-		int hlen = prefs.hostname[0];
+		/* the Pascal length byte, read unsigned (plain char is signed on 68k) */
+		int hlen = (unsigned char)prefs.hostname[0];
 		if (hlen > 255) hlen = 255;
 		host_only[0] = hlen;
 		memcpy(host_only + 1, prefs.hostname + 1, hlen);
@@ -3286,6 +3300,39 @@ void ssh_disconnect(int session_idx)
 	}
 }
 
+/* The four Apple Events every application that takes them must handle.
+   MacShell needs to take them to send "open documents" for the open command;
+   the useful one here is Quit, which the Finder sends at Shut Down. */
+static pascal OSErr ae_open_app(const AppleEvent* e, AppleEvent* r, long ref)
+{
+	(void)e; (void)r; (void)ref;
+	return noErr;
+}
+
+static pascal OSErr ae_not_handled(const AppleEvent* e, AppleEvent* r, long ref)
+{
+	(void)e; (void)r; (void)ref;
+	return errAEEventNotHandled;                /* MacShell has no documents to open or print */
+}
+
+static pascal OSErr ae_quit(const AppleEvent* e, AppleEvent* r, long ref)
+{
+	(void)e; (void)r; (void)ref;
+	exit_requested = 1;                         /* as choosing Quit from the menu */
+	return noErr;
+}
+
+static void install_ae_handlers(void)
+{
+	long resp;
+	if (Gestalt(gestaltAppleEventsAttr, &resp) != noErr || !(resp & (1L << gestaltAppleEventsPresent)))
+		return;
+	AEInstallEventHandler(kCoreEventClass, kAEOpenApplication, NewAEEventHandlerUPP(ae_open_app), 0, false);
+	AEInstallEventHandler(kCoreEventClass, kAEOpenDocuments, NewAEEventHandlerUPP(ae_not_handled), 0, false);
+	AEInstallEventHandler(kCoreEventClass, kAEPrintDocuments, NewAEEventHandlerUPP(ae_not_handled), 0, false);
+	AEInstallEventHandler(kCoreEventClass, kAEQuitApplication, NewAEEventHandlerUPP(ae_quit), 0, false);
+}
+
 int main(int argc, char** argv)
 {
 	// mark all session slots as safe to reuse (no thread running)
@@ -3297,6 +3344,12 @@ int main(int argc, char** argv)
 			sessions[i].thread_id = kNoThreadID;
 		}
 	}
+
+	/* give the main thread 32 KB more stack than the system default (often
+	   only 24 KB on 68k): commands run on it, and the deepest paths (event
+	   loop -> command -> path lookup) come to about 16 KB. Must come before
+	   MaxApplZone, which grows the heap up to this limit. */
+	SetApplLimit((Ptr)((long)GetApplLimit() - 32L * 1024));
 
 	// expands the application heap to its maximum requested size
 	// supposedly good for performance
@@ -3317,6 +3370,7 @@ int main(int argc, char** argv)
 	InitFonts();
 	InitWindows();
 	InitMenus();
+	install_ae_handlers();
 
 	// gather randomness for SSH/TLS (sound input + clock jitter; asks for
 	// mouse/keyboard input only if those give less than 256 bits). If the user

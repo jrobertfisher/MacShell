@@ -415,7 +415,7 @@ resource 'SIZE' (-1) {
 	dontGetFrontClicks,
 	ignoreChildDiedEvents,
 	is32BitCompatible,
-	notHighLevelEventAware,
+	isHighLevelEventAware,          /* sends Apple Events (open) and gets the four required ones */
 	onlyLocalHLEvents,
 	notStationeryAware,
 	dontUseTextEditServices,

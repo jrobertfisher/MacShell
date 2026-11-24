@@ -161,6 +161,12 @@ struct session
 	short shell_prev_vRefNum;
 	long shell_prev_dirID;
 	int keygen_stage;            /* ssh-keygen: 1 = ask passphrase, 2 = confirm */
+	int more_active;             /* --more-- pager waiting for a key */
+	const char** more_lines;     /* the lines being paged, and where we are */
+	int more_n, more_pos;
+	char* more_own_text;         /* freed when paging ends (NULL if not ours) */
+	int more_own_lines;          /* more_lines was NewPtr'd by the pager */
+	char* xfer_buf;              /* wget/curl/ftp transfer buffer (32 KB, NewPtr) */
 	char keygen_pass[128];
 	char keygen_name[32];
 	char keygen_comment[64];

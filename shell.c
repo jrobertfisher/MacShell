@@ -25,6 +25,7 @@
 #include <DateTimeUtils.h>
 #include <MacMemory.h>
 #include <Processes.h>
+#include <AppleEvents.h>
 #include <TextUtils.h>
 #include <Threads.h>
 #include <Timer.h>
@@ -45,6 +46,7 @@
 
 static unsigned long ot_timeout_deadline = 0;
 static ProviderRef ot_timeout_provider = nil;
+static int ot_timeout_session = -1;     /* Ctrl+C in this session also cancels */
 
 pascal void shell_ot_timeout_notifier(void* context, OTEventCode event,
                                       OTResult result, void* cookie)
@@ -55,13 +57,30 @@ pascal void shell_ot_timeout_notifier(void* context, OTEventCode event,
 	if (event == kOTSyncIdleEvent)
 	{
 		YieldToAnyThread();
-		if (ot_timeout_deadline > 0 &&
-		    TickCount() > ot_timeout_deadline &&
-		    ot_timeout_provider != nil)
+		if (ot_timeout_deadline > 0 && ot_timeout_provider != nil &&
+		    (TickCount() > ot_timeout_deadline ||
+		     (ot_timeout_session >= 0 && sessions[ot_timeout_session].thread_command == EXIT)))
 		{
 			OTCancelSynchronousCalls(ot_timeout_provider, kOTCanceledErr);
 		}
 	}
+}
+
+/* looks host up (dns_resolve: our own query, a few seconds at most) and
+   fills in call to connect to it. Used instead of OTInitDNSAddress, whose
+   lookup inside OTConnect can run far past our deadline. Returns 0, or -1
+   after printing why. */
+static int shell_connect_addr(int idx, const char* cmd, const char* host, unsigned short port,
+                              TCall* call, InetAddress* ia)
+{
+	InetHost h;
+	if (dns_resolve(idx, cmd, host, &h) != 0)
+		return -1;
+	OTInitInetAddress(ia, port, h);
+	OTMemzero(call, sizeof(TCall));
+	call->addr.buf = (UInt8*)ia;
+	call->addr.len = sizeof(InetAddress);
+	return 0;
 }
 
 /* max arguments for a command */
@@ -359,7 +378,9 @@ static void mac_name_to_unix(const unsigned char* pname, char* out, int size)
 /* "/Volume/Folder/Sub/" for a folder (always ends in '/') */
 static void get_full_path(short vRefNum, long dirID, char* out, int maxlen)
 {
-	char parts[32][64];
+	/* static, not on the (small) main-thread stack: 2 KB. Safe because this
+	   never yields to another thread and never calls itself. */
+	static char parts[32][64];
 	int depth = 0, i;
 	long curDir = dirID;
 
@@ -455,7 +476,9 @@ static int find_volume(const char* name, short* vRefNum)
 static OSErr resolve_path(int idx, const char* path, FSSpec* spec)
 {
 	struct session* s = &sessions[idx];
-	char comps[64][64];
+	/* static, not on the (small) main-thread stack: 4 KB. Safe because this
+	   never yields to another thread and never calls itself. */
+	static char comps[64][64];
 	int ncomp = 0, i, at_root = 0;
 	short vref = s->shell_vRefNum;
 	long dir = s->shell_dirID;
@@ -739,37 +762,38 @@ static const char* ls_color(int is_dir, int is_locked, int is_invis, OSType ftyp
 	return "";
 }
 
-/* simple glob match: supports * and ? only, case-insensitive */
+/* simple glob match: supports * and ? only, case-insensitive.
+   Iterative (remember the last * and retry from there), so it uses a fixed
+   amount of stack whatever the pattern, and runs in at most
+   len(pattern) * len(str) steps. */
 static int glob_match(const char* pattern, const char* str)
 {
-	while (*pattern)
+	const char* star = NULL;      /* the last * seen in pattern */
+	const char* resume = NULL;    /* where in str that * would retry from */
+
+	while (*str)
 	{
 		if (*pattern == '*')
 		{
-			pattern++;
-			if (!*pattern) return 1; /* trailing * matches everything */
-			while (*str)
-			{
-				if (glob_match(pattern, str)) return 1;
-				str++;
-			}
-			return 0;
+			star = ++pattern;
+			resume = str;
 		}
-		else if (*pattern == '?')
+		else if (*pattern == '?' ||
+		         (*pattern && tolower((unsigned char)*pattern) == tolower((unsigned char)*str)))
 		{
-			if (!*str) return 0;
 			pattern++;
 			str++;
+		}
+		else if (star)
+		{
+			pattern = star;           /* let the * swallow one more character */
+			str = ++resume;
 		}
 		else
-		{
-			if (tolower((unsigned char)*pattern) != tolower((unsigned char)*str))
-				return 0;
-			pattern++;
-			str++;
-		}
+			return 0;
 	}
-	return *str == '\0';
+	while (*pattern == '*') pattern++;
+	return *pattern == '\0';
 }
 
 /* ls with glob pattern: enumerate directory, filter by pattern */
@@ -864,8 +888,10 @@ static void cmd_ls_glob(int idx, const char* target, int long_fmt,
 			FSSpec fspec;
 			fspec.vRefNum = vRef;
 			fspec.parID = dID;
-			fspec.name[0] = name[0];
-			memcpy(fspec.name + 1, name + 1, name[0]);
+			/* clamp to the FSSpec name field (HFS names are at most 31, but
+			   don't trust a file system to say so) */
+			fspec.name[0] = (unsigned char)name[0] > sizeof(fspec.name) - 1 ? sizeof(fspec.name) - 1 : name[0];
+			memcpy(fspec.name + 1, name + 1, fspec.name[0]);
 
 			if (long_fmt)
 			{
@@ -1613,61 +1639,112 @@ static int shell_confirm(int idx)
 }
 
 /* simple --more-- pager: returns 0 to continue, 1 if user quit (q/Esc) */
-static int shell_more_prompt(int idx)
+/* ---- --more-- pager ----
+   The pager does not wait for keys itself: it shows a page, leaves its place
+   in the session and returns to the event loop, so the window is redrawn and
+   menus, other windows and the SSH server keep working. shell_input() then
+   hands keys to shell_more_key() until the text ends or the user quits.
+   The prompt (and the rest of a ; / && line) waits until then. */
+
+#define SHELL_XFER_SIZE 32768L
+
+/* the session's transfer buffer for wget, curl and ftp (one transfer runs
+   at a time in a session), allocated on first use */
+static char* shell_xfer_buf(int idx)
 {
-	EventRecord evt;
-	vt_write(idx, "\033[7m--more--\033[0m");
-	while (1)
+	struct session* s = &sessions[idx];
+	if (s->xfer_buf == NULL)
+		s->xfer_buf = NewPtr(SHELL_XFER_SIZE);
+	return s->xfer_buf;
+}
+
+/* frees what the shell keeps per session (called when a session closes) */
+void shell_free_session(int idx)
+{
+	shell_more_free(idx);
+	if (sessions[idx].xfer_buf)
 	{
-		if (WaitNextEvent(everyEvent, &evt, 10, NULL))
-		{
-			if (evt.what == keyDown)
-			{
-				char c = evt.message & charCodeMask;
-				/* erase the --more-- prompt */
-				vt_write(idx, "\r\033[K");
-				if (c == 'q' || c == 'Q' || c == 27) /* q or Escape = quit */
-					return 1;
-				return 0; /* any other key = next page */
-			}
-			else if (evt.what == updateEvt)
-			{
-				WindowPtr evtWin = (WindowPtr)evt.message;
-				struct window_context* ewc = find_window_context(evtWin);
-				if (ewc)
-				{
-					SetPort(evtWin);
-					BeginUpdate(evtWin);
-					draw_screen(ewc, &(evtWin->portRect));
-					EndUpdate(evtWin);
-				}
-			}
-		}
-		YieldToAnyThread();
+		DisposePtr(sessions[idx].xfer_buf);
+		sessions[idx].xfer_buf = NULL;
 	}
 }
 
-/* paginated write: outputs lines with --more-- prompt every screenful */
-static void shell_paged_write(int idx, const char** lines, int nlines)
+void shell_more_free(int idx)
+{
+	struct session* s = &sessions[idx];
+	if (s->more_own_lines && s->more_lines) DisposePtr((Ptr)s->more_lines);
+	if (s->more_own_text) DisposePtr(s->more_own_text);
+	s->more_lines = NULL;
+	s->more_own_text = NULL;
+	s->more_own_lines = 0;
+	s->more_active = 0;
+	s->more_n = s->more_pos = 0;
+}
+
+static int shell_page_size(int idx)
 {
 	struct window_context* wc = window_for_session(idx);
-	int page_size = wc ? wc->size_y - 2 : 22; /* leave room for prompt */
-	int line_count = 0;
-	int i;
+	int n = wc ? wc->size_y - 1 : 23;      /* leave the last row for --more-- */
+	return n < 2 ? 2 : n;
+}
 
-	for (i = 0; i < nlines; i++)
+/* write up to n more lines; then either show --more-- or finish */
+static void shell_more_show(int idx, int n)
+{
+	struct session* s = &sessions[idx];
+	while (n-- > 0 && s->more_pos < s->more_n)
 	{
-		vt_write(idx, lines[i]);
+		vt_write(idx, s->more_lines[s->more_pos++]);
 		vt_write(idx, "\r\n");
-		line_count++;
-
-		if (line_count >= page_size && i + 1 < nlines && !sessions[idx].sshd_exec)
-		{
-			if (shell_more_prompt(idx))
-				return; /* user pressed q */
-			line_count = 0;
-		}
 	}
+	if (s->more_pos < s->more_n)
+	{
+		vt_write(idx, "\033[7m--more-- (space: page, return: line, q: quit)\033[0m");
+		s->more_active = 1;
+	}
+	else
+		shell_more_free(idx);
+}
+
+/* a key while --more-- is showing */
+static void shell_more_key(int idx, unsigned char c)
+{
+	struct session* s = &sessions[idx];
+	vt_write(idx, "\r\033[K");                     /* erase --more-- */
+	if (c == 'q' || c == 'Q' || c == 27 || c == 3)
+		shell_more_free(idx);
+	else if (c == '\r' || c == 'j')
+		shell_more_show(idx, 1);
+	else
+		shell_more_show(idx, shell_page_size(idx));
+	if (!s->more_active)
+	{
+		if (s->pending_line[0])
+			return;                                 /* shell_tick() runs the rest */
+		shell_prompt(idx);
+	}
+}
+
+/* paginated write. own_text / own_lines: the caller's NewPtr'd text and
+   lines array, which the pager frees when it is done with them. */
+static void shell_paged_write_own(int idx, const char** lines, int nlines,
+                                  char* own_text, int own_lines)
+{
+	struct session* s = &sessions[idx];
+	shell_more_free(idx);
+	s->more_lines = lines;
+	s->more_n = nlines;
+	s->more_pos = 0;
+	s->more_own_text = own_text;
+	s->more_own_lines = own_lines;
+	/* over ssh (one-off command or a hidden session) there is no one to
+	   press keys for each page: write it all */
+	shell_more_show(idx, s->sshd_exec ? nlines : shell_page_size(idx));
+}
+
+static void shell_paged_write(int idx, const char** lines, int nlines)
+{
+	shell_paged_write_own(idx, lines, nlines, NULL, 0);
 }
 
 static void cmd_rm(int idx, int argc, char* argv[])
@@ -1749,8 +1826,10 @@ static void cmd_rm(int idx, int argc, char* argv[])
 
 				fspec.vRefNum = gvref;
 				fspec.parID = gdir;
-				fspec.name[0] = name[0];
-				memcpy(fspec.name + 1, name + 1, name[0]);
+				/* clamp to the FSSpec name field (HFS names are at most 31, but
+				   don't trust a file system to say so) */
+				fspec.name[0] = (unsigned char)name[0] > sizeof(fspec.name) - 1 ? sizeof(fspec.name) - 1 : name[0];
+				memcpy(fspec.name + 1, name + 1, fspec.name[0]);
 
 				e = FSpDelete(&fspec);
 				if (e == noErr)
@@ -2251,7 +2330,8 @@ static void cmd_settype(int idx, int argc, char* argv[])
 	if (e != noErr) { vt_write(idx, "settype: cannot read info\r\n"); return; }
 
 	finfo.fdType = str_to_ostype(argv[1]);
-	FSpSetFInfo(&spec, &finfo);
+	e = FSpSetFInfo(&spec, &finfo);
+	if (e != noErr) { printf_s(idx, "settype: couldn't change it (error %d)\r\n", (int)e); shell_set_status(idx, 1); }
 }
 
 static void cmd_fixtype(int idx, int argc, char* argv[])
@@ -2314,8 +2394,10 @@ static void cmd_fixtype(int idx, int argc, char* argv[])
 
 				fspec.vRefNum = gvref;
 				fspec.parID = gdir;
-				fspec.name[0] = name[0];
-				memcpy(fspec.name + 1, name + 1, name[0]);
+				/* clamp to the FSSpec name field (HFS names are at most 31, but
+				   don't trust a file system to say so) */
+				fspec.name[0] = (unsigned char)name[0] > sizeof(fspec.name) - 1 ? sizeof(fspec.name) - 1 : name[0];
+				memcpy(fspec.name + 1, name + 1, fspec.name[0]);
 
 				if (FSpGetFInfo(&fspec, &finfo) != noErr) { skipped++; continue; }
 				finfo.fdType = ftype;
@@ -2391,7 +2473,8 @@ static void cmd_setcreator(int idx, int argc, char* argv[])
 	if (e != noErr) { vt_write(idx, "setcreator: cannot read info\r\n"); return; }
 
 	finfo.fdCreator = str_to_ostype(argv[1]);
-	FSpSetFInfo(&spec, &finfo);
+	e = FSpSetFInfo(&spec, &finfo);
+	if (e != noErr) { printf_s(idx, "setcreator: couldn't change it (error %d)\r\n", (int)e); shell_set_status(idx, 1); }
 }
 
 static void cmd_chmod(int idx, int argc, char* argv[])
@@ -2637,20 +2720,20 @@ static void cmd_entropy(int idx, int argc, char* argv[])
 
 	vt_write(idx, "  sound input   ");
 	if (!st->sound_available) vt_write(idx, "not available\r\n");
-	else if (!st->sound_passed) vt_write(idx, "failed health tests (silent or patterned), 0 bits\r\n");
-	else { vt_print_long(idx, st->sound_bits); vt_write(idx, " bits\r\n"); }
+	else if (!st->sound_passed) vt_write(idx, "failed health tests (silent or patterned)\r\n");
+	else vt_write(idx, "passed health tests; mixed in, not counted\r\n");
 
 	vt_write(idx, "  clock jitter  ");
-	if (!st->jitter_passed) vt_write(idx, "failed health tests, 0 bits\r\n");
-	else { vt_print_long(idx, st->jitter_bits); vt_write(idx, " bits\r\n"); }
+	if (!st->jitter_passed) vt_write(idx, "failed health tests\r\n");
+	else vt_write(idx, "passed health tests; mixed in, not counted\r\n");
 
 	vt_write(idx, "  seed file     ");
-	vt_write(idx, st->seed_valid ? "valid (counts as 256 bits)\r\n" : "none yet\r\n");
+	vt_write(idx, st->seed_valid ? "valid (counts as 256 bits)\r\n" : "none (or already used)\r\n");
 
 	if (st->human_bits > 0) {
 		vt_write(idx, "  mouse/keys    ");
 		vt_print_long(idx, st->human_bits);
-		vt_write(idx, " bits (fallback)\r\n");
+		vt_write(idx, " bits\r\n");
 	}
 
 	vt_write(idx, "  total         ");
@@ -2692,6 +2775,17 @@ static void cmd_uname(int idx, int argc, char* argv[])
 		vt_write(idx, "MC68020");
 	else
 		vt_write(idx, "MC680x0");
+
+	/* -a: also which of MacShell's two versions is running (a Power Mac
+	   runs the PowerPC code; it can also run the 68k version, emulated) */
+	if (argc >= 2 && strcmp(argv[1], "-a") == 0)
+	{
+#if defined(__powerpc__) || defined(__POWERPC__) || defined(__ppc__)
+		vt_write(idx, ", MacShell " APP_VERSION " (PowerPC code)");
+#else
+		vt_write(idx, ", MacShell " APP_VERSION " (68k code)");
+#endif
+	}
 
 	vt_write(idx, "\r\n");
 }
@@ -2833,42 +2927,6 @@ static void cmd_ps(int idx, int argc, char* argv[])
 	}
 }
 
-static void cmd_open(int idx, int argc, char* argv[])
-{
-	FSSpec spec;
-	OSErr e;
-	FInfo finfo;
-	LaunchParamBlockRec lpb;
-
-	if (argc < 2) { vt_write(idx, "usage: open <path>\r\n"); return; }
-
-	e = resolve_path_alias(idx, argv[1], &spec);
-	if (e != noErr) { vt_write(idx, "open: file not found\r\n"); return; }
-
-	e = FSpGetFInfo(&spec, &finfo);
-	if (e != noErr) { vt_write(idx, "open: cannot get file info\r\n"); return; }
-
-	if (finfo.fdType != 'APPL')
-	{
-		vt_write(idx, "open: not an application\r\n");
-		return;
-	}
-
-	memset(&lpb, 0, sizeof(lpb));
-	lpb.launchBlockID = extendedBlock;
-	lpb.launchEPBLength = extendedBlockLen;
-	lpb.launchAppSpec = &spec;
-	lpb.launchControlFlags = launchContinue | launchNoFileFlags;
-
-	e = LaunchApplication(&lpb);
-	if (e != noErr)
-	{
-		char buf[64];
-		snprintf(buf, sizeof(buf), "open: launch failed (error %d)\r\n", (int)e);
-		vt_write(idx, buf);
-	}
-}
-
 static void cmd_ssh(int idx, int argc, char* argv[])
 {
 	/* ssh [user@]host[:port] connects straight away; plain ssh opens the Connect dialog */
@@ -2932,7 +2990,9 @@ static void cmd_ssh(int idx, int argc, char* argv[])
 		if (port && port[0])
 		{
 			plen = strlen(port);
-			if (plen > 254) plen = 254;
+			/* the "250 - plen" budget below leaves room for the host; a real
+			   port is at most 5 digits */
+			if (plen > 249) plen = 249;
 			prefs.port[0] = plen;
 			memcpy(prefs.port + 1, port, plen);
 		}
@@ -2947,6 +3007,7 @@ static void cmd_ssh(int idx, int argc, char* argv[])
 		/* hostname holds "host:port" as a C string after the length byte */
 		hlen = strlen(host);
 		if (hlen > 250 - plen) hlen = 250 - plen;
+		if (hlen < 0) hlen = 0;             /* at least 0 */
 		memset(prefs.hostname, 0, sizeof(prefs.hostname));
 		prefs.hostname[0] = hlen;
 		memcpy(prefs.hostname + 1, host, hlen);
@@ -3223,7 +3284,7 @@ static void ping_tcp(int idx, const char* host, unsigned short port)
 	EndpointRef ep;
 	OSStatus err;
 	TCall sndCall;
-	DNSAddress hostDNSAddress;
+	InetAddress host_inet;
 	char hostport[280];
 	long start_ticks, elapsed;
 
@@ -3255,9 +3316,12 @@ static void ping_tcp(int idx, const char* host, unsigned short port)
 		return;
 	}
 
-	OTMemzero(&sndCall, sizeof(TCall));
-	sndCall.addr.buf = (UInt8 *) &hostDNSAddress;
-	sndCall.addr.len = OTInitDNSAddress(&hostDNSAddress, hostport);
+	if (shell_connect_addr(idx, "ping", host, port, &sndCall, &host_inet) != 0)
+	{
+		OTUnbind(ep);
+		OTCloseProvider(ep);
+		return;
+	}
 
 	printf_s(idx, "Connecting to %s... ", hostport);
 
@@ -5383,6 +5447,14 @@ static void cmd_sleep(int idx, int argc, char** argv)
 	}
 
 	secs = atol(argv[1]);
+	/* Delay holds the whole (cooperative) application, so keep it short;
+	   this also keeps secs * 60 well inside a long */
+	if (secs > 300)
+	{
+		vt_write(idx, "sleep: at most 300 seconds\r\n");
+		shell_set_status(idx, 1);
+		return;
+	}
 	if (secs > 0)
 		Delay(secs * 60, &dummy);
 }
@@ -6130,7 +6202,17 @@ static void cmd_xxd(int idx, int argc, char** argv)
 								p++;
 
 								if (hi >= 0 && lo >= 0)
+								{
+									/* flush when full: a line may carry more than
+									   16 bytes (xxd -c 32) */
+									if (out_count == (long)sizeof(outbuf))
+									{
+										long n = out_count;
+										FSWrite(out_ref, &n, outbuf);
+										out_count = 0;
+									}
 									outbuf[out_count++] = (unsigned char)((hi << 4) | lo);
+								}
 							}
 
 							if (out_count > 0)
@@ -6987,6 +7069,17 @@ static void extract_filename(const char* url_path, const char* headers,
 #include <mbedtls/entropy.h>
 #include <mbedtls/net_sockets.h>
 
+/* kOTLookErr only says an event is waiting. Some events just mean "try
+   again": T_GODATA / T_GOEXDATA (sending may continue after flow
+   control) and T_DATA / T_EXDATA (data arrived). Returns the event;
+   *retry is set for those. */
+static OTResult ot_look_retry(EndpointRef ep, int* retry)
+{
+	OTResult ev = OTLook(ep);
+	*retry = (ev == T_GODATA || ev == T_GOEXDATA || ev == T_DATA || ev == T_EXDATA);
+	return ev;
+}
+
 /* I/O callbacks for mbedtls over Open Transport */
 static int wget_tls_send(void* ctx, const unsigned char* buf, size_t len)
 {
@@ -6994,6 +7087,12 @@ static int wget_tls_send(void* ctx, const unsigned char* buf, size_t len)
 	EndpointRef ep = (EndpointRef)ctx;
 	r = OTSnd(ep, (void*)buf, len, 0);
 	if (r == kOTFlowErr) return MBEDTLS_ERR_SSL_WANT_WRITE;
+	if (r == kOTLookErr)
+	{
+		int retry;
+		ot_look_retry(ep, &retry);
+		if (retry) return MBEDTLS_ERR_SSL_WANT_WRITE;
+	}
 	if (r < 0) return MBEDTLS_ERR_NET_SEND_FAILED;
 	return (int)r;
 }
@@ -7006,13 +7105,16 @@ static int wget_tls_recv(void* ctx, unsigned char* buf, size_t len)
 	if (r == kOTNoDataErr) return MBEDTLS_ERR_SSL_WANT_READ;
 	if (r == kOTLookErr)
 	{
-		/* check for orderly disconnect */
-		OTResult ev = OTLook(ep);
+		/* orderly disconnect = end of data; harmless events = try again */
+		int retry;
+		OTResult ev = ot_look_retry(ep, &retry);
+		if (retry) return MBEDTLS_ERR_SSL_WANT_READ;
 		if (ev == T_ORDREL)
 		{
 			OTRcvOrderlyDisconnect(ep);
 			return 0; /* clean EOF */
 		}
+		if (ev == T_DISCONNECT) OTRcvDisconnect(ep, nil);
 		return MBEDTLS_ERR_NET_RECV_FAILED;
 	}
 	if (r == 0) return 0; /* clean EOF */
@@ -7086,7 +7188,7 @@ static void cmd_wget_run(int idx, const char* initial_url, int no_progress)
 	EndpointRef ep;
 	OSStatus err;
 	TCall sndCall;
-	DNSAddress hostDNSAddress;
+	InetAddress host_inet;
 	char hostport[280];
 	char request[1024];
 	int req_len;
@@ -7127,6 +7229,22 @@ static void cmd_wget_run(int idx, const char* initial_url, int no_progress)
 	unsigned long download_elapsed_ticks = 0;
 
 retry_redirect:
+	/* everything about the previous response starts over: a redirect's own
+	   body must not count towards this one's progress, MacBinary check or
+	   result, and an https -> http redirect must not keep using TLS */
+	use_tls = 0;
+	resp_len = 0;
+	header_done = 0;
+	status_code = 0;
+	content_length = -1;
+	total_written = 0;
+	progress_live = 0;
+	first_bytes_len = 0;
+	checked_macbinary = 0;
+	download_ok = 0;
+	ftype = 'BINA';
+	fcreator = '????';
+
 	/* parse URL */
 	{
 		const char* p = url;
@@ -7220,26 +7338,34 @@ retry_redirect:
 
 	snprintf(hostport, sizeof(hostport), "%s:%d", host, (int)port);
 
-	OTMemzero(&sndCall, sizeof(TCall));
-	sndCall.addr.buf = (UInt8*) &hostDNSAddress;
-	sndCall.addr.len = OTInitDNSAddress(&hostDNSAddress, hostport);
+	if (shell_connect_addr(idx, s->wget_is_curl ? "curl" : "wget", host, port,
+	                       &sndCall, &host_inet) != 0)
+	{
+		OTUnbind(ep);
+		OTCloseProvider(ep);
+		s->endpoint = kOTInvalidEndpointRef;
+		return;
+	}
 
 	if (!s->wget_is_curl)
 		printf_s(idx, "Connecting to %s%s... ",
 		         use_tls ? "(TLS) " : "", hostport);
 
 	ot_timeout_provider = ep;
+	ot_timeout_session = idx;
 	ot_timeout_deadline = TickCount() + OT_TIMEOUT_TICKS;
 
 	err = OTConnect(ep, &sndCall, nil);
 
 	ot_timeout_deadline = 0;
 	ot_timeout_provider = nil;
+	ot_timeout_session = -1;
 
 	if (err != noErr)
 	{
 		if (err == kOTCanceledErr)
-			vt_write(idx, "timed out\r\n");
+			vt_write(idx, s->thread_command == EXIT ? "cancelled\r\n"
+			              : "timed out (no answer in 10 seconds)\r\n");
 		else
 			printf_s(idx, "failed (err=%d)\r\n", (int)err);
 		OTUnbind(ep);
@@ -7430,9 +7556,14 @@ retry_redirect:
 		while (1)
 		{
 			int r;
-			char buf[32768];
+			char* buf = shell_xfer_buf(idx);   /* 32 KB, on the heap: too big for a 64 KB thread stack */
 			unsigned long now = TickCount();
 
+			if (buf == NULL)
+			{
+				vt_write(idx, "\r\nout of memory for the transfer buffer\r\n");
+				break;
+			}
 			if (s->thread_command == EXIT || !s->in_use)
 			{
 				vt_write(idx, "\r\nwget: cancelled\r\n");
@@ -7449,7 +7580,7 @@ retry_redirect:
 
 			if (use_tls)
 			{
-				r = mbedtls_ssl_read(&ssl, (unsigned char*)buf, sizeof(buf));
+				r = mbedtls_ssl_read(&ssl, (unsigned char*)buf, SHELL_XFER_SIZE);
 				if (r == MBEDTLS_ERR_SSL_WANT_READ ||
 				    r == MBEDTLS_ERR_SSL_WANT_WRITE)
 				{ YieldToAnyThread(); continue; }
@@ -7459,11 +7590,13 @@ retry_redirect:
 			}
 			else
 			{
-				OTResult otr = OTRcv(ep, buf, sizeof(buf), nil);
+				OTResult otr = OTRcv(ep, buf, SHELL_XFER_SIZE, nil);
 				if (otr == kOTNoDataErr) { YieldToAnyThread(); continue; }
 				if (otr == kOTLookErr)
 				{
-					OTResult ev = OTLook(ep);
+					int retry;
+					OTResult ev = ot_look_retry(ep, &retry);
+					if (retry) { YieldToAnyThread(); continue; }
 					if (ev == T_ORDREL)
 					{
 						OTRcvOrderlyDisconnect(ep);
@@ -7900,8 +8033,8 @@ static EndpointRef ftp_tcp_connect(int idx, const char* host,
 	EndpointRef ep;
 	OSStatus err;
 	TCall sndCall;
-	DNSAddress hostDNSAddress;
-	char hostport[280];
+	InetHost host_addr;
+	InetAddress host_inet;
 
 	if (InitOpenTransport() != noErr)
 	{
@@ -7929,19 +8062,31 @@ static EndpointRef ftp_tcp_connect(int idx, const char* host,
 		return kOTInvalidEndpointRef;
 	}
 
-	snprintf(hostport, sizeof(hostport), "%s:%d", host, (int)port);
+	/* look the name up ourselves (a few seconds at most, Ctrl+C stops it),
+	   then connect to the address with a 10 second limit. Open Transport's
+	   own lookup inside OTConnect could keep retrying a bad name for much
+	   longer than any deadline we set. */
+	if (dns_resolve(idx, "ftp", host, &host_addr) != 0)
+	{
+		OTUnbind(ep);
+		OTCloseProvider(ep);
+		return kOTInvalidEndpointRef;
+	}
 
 	OTMemzero(&sndCall, sizeof(TCall));
-	sndCall.addr.buf = (UInt8*)&hostDNSAddress;
-	sndCall.addr.len = OTInitDNSAddress(&hostDNSAddress, hostport);
+	OTInitInetAddress(&host_inet, port, host_addr);
+	sndCall.addr.buf = (UInt8*)&host_inet;
+	sndCall.addr.len = sizeof host_inet;
 
 	ot_timeout_provider = ep;
-	ot_timeout_deadline = TickCount() + 1800;
+	ot_timeout_session = idx;
+	ot_timeout_deadline = TickCount() + OT_TIMEOUT_TICKS;
 
 	err = OTConnect(ep, &sndCall, nil);
 
 	ot_timeout_deadline = 0;
 	ot_timeout_provider = nil;
+	ot_timeout_session = -1;
 
 	if (err == kOTLookErr)
 	{
@@ -7957,7 +8102,8 @@ static EndpointRef ftp_tcp_connect(int idx, const char* host,
 	if (err != noErr)
 	{
 		if (err == kOTCanceledErr)
-			vt_write(idx, "timed out\r\n");
+			vt_write(idx, sessions[idx].thread_command == EXIT ? "cancelled\r\n"
+			              : "timed out (no answer in 10 seconds)\r\n");
 		else
 			printf_s(idx, "failed (err=%d)\r\n", (int)err);
 		OTUnbind(ep);
@@ -8052,9 +8198,11 @@ static int ftp_recv_line(int idx, EndpointRef ep,
 		if (r == kOTNoDataErr) { YieldToAnyThread(); continue; }
 		if (r == kOTLookErr)
 		{
-			OTResult ev = OTLook(ep);
-			printf_s(idx, "\r\n[ftp_recv: OTLookErr, ev=%d]\r\n", (int)ev);
+			int retry;
+			OTResult ev = ot_look_retry(ep, &retry);
+			if (retry) { YieldToAnyThread(); continue; }
 			if (ev == T_ORDREL) OTRcvOrderlyDisconnect(ep);
+			else if (ev == T_DISCONNECT) OTRcvDisconnect(ep, nil);
 			return -1;
 		}
 		if (r <= 0)
@@ -8115,11 +8263,14 @@ static int ftp_command(int idx, EndpointRef ctrl_ep,
 			return -1;
 		}
 
-		/* copy to response buffer (best-effort; overflow is OK) */
-		if (resp_total + line_len < resp_buf_size - 1)
+		/* copy to the response buffer, cutting off what doesn't fit; the
+		   first line always goes in (at least in part) */
+		if (resp_total < resp_buf_size - 1)
 		{
-			memcpy(resp_buf + resp_total, line_buf, line_len);
-			resp_total += line_len;
+			int n = line_len;
+			if (n > resp_buf_size - 1 - resp_total) n = resp_buf_size - 1 - resp_total;
+			memcpy(resp_buf + resp_total, line_buf, n);
+			resp_total += n;
 			resp_buf[resp_total] = '\0';
 		}
 
@@ -8552,7 +8703,7 @@ static int ftp_download(int idx, EndpointRef ctrl_ep,
 	/* try SIZE (optional) */
 	snprintf(cmd, sizeof(cmd), "SIZE %s", remote_path);
 	code = ftp_command(idx, ctrl_ep, cmd, resp, sizeof(resp));
-	if (code == 213)
+	if (code == 213 && strlen(resp) > 4)
 	{
 		const char* sp = resp + 4; /* skip "213 " */
 		while (*sp == ' ') sp++;
@@ -8632,8 +8783,13 @@ static int ftp_download(int idx, EndpointRef ctrl_ep,
 	{
 		OTResult r;
 		OTFlags ot_flags = 0;
-		char buf[32768];
+		char* buf = shell_xfer_buf(idx);   /* 32 KB, on the heap: too big for a 64 KB thread stack */
 
+		if (buf == NULL)
+		{
+			vt_write(idx, "\r\nout of memory for the transfer buffer\r\n");
+			break;
+		}
 		if (s->thread_command == EXIT || !s->in_use)
 		{
 			vt_write(idx, "\r\nftp: cancelled\r\n");
@@ -8646,11 +8802,13 @@ static int ftp_download(int idx, EndpointRef ctrl_ep,
 			break;
 		}
 
-		r = OTRcv(data_ep, buf, sizeof(buf), &ot_flags);
+		r = OTRcv(data_ep, buf, SHELL_XFER_SIZE, &ot_flags);
 		if (r == kOTNoDataErr) { YieldToAnyThread(); continue; }
 		if (r == kOTLookErr)
 		{
-			OTResult ev = OTLook(data_ep);
+			int retry;
+			OTResult ev = ot_look_retry(data_ep, &retry);
+			if (retry) { YieldToAnyThread(); continue; }
 			if (ev == T_ORDREL)
 			{
 				OTRcvOrderlyDisconnect(data_ep);
@@ -8851,17 +9009,22 @@ static int ftp_upload(int idx, EndpointRef ctrl_ep,
 
 	while (total_sent < file_size)
 	{
-		char buf[32768];
+		char* buf = shell_xfer_buf(idx);   /* 32 KB, on the heap: too big for a 64 KB thread stack */
 		long to_read = file_size - total_sent;
 		long count;
 
+		if (buf == NULL)
+		{
+			vt_write(idx, "\r\nout of memory for the transfer buffer\r\n");
+			break;
+		}
 		if (s->thread_command == EXIT || !s->in_use)
 		{
 			vt_write(idx, "\r\nftp: cancelled\r\n");
 			break;
 		}
 
-		if (to_read > (long)sizeof(buf)) to_read = (long)sizeof(buf);
+		if (to_read > (long)SHELL_XFER_SIZE) to_read = (long)SHELL_XFER_SIZE;
 		count = upload_read(&src, buf, to_read);
 		if (count <= 0) break;
 
@@ -8980,7 +9143,9 @@ static int ftp_list(int idx, EndpointRef ctrl_ep, const char* remote_path)
 		if (r == kOTNoDataErr) { YieldToAnyThread(); continue; }
 		if (r == kOTLookErr)
 		{
-			OTResult ev = OTLook(data_ep);
+			int retry;
+			OTResult ev = ot_look_retry(data_ep, &retry);
+			if (retry) { YieldToAnyThread(); continue; }
 			if (ev == T_ORDREL) OTRcvOrderlyDisconnect(data_ep);
 			break;
 		}
@@ -10066,7 +10231,8 @@ int shell_is_busy(int idx)
 	struct session* s = &sessions[idx];
 	if (!s->in_use) return 0;
 	return local_shell_worker_active(s) || s->pending_line[0] || s->ftp_mode != FTP_MODE_OFF ||
-	       s->keygen_stage != 0 || s->hide_input || s->worker_mode == WORKER_NC;
+	       s->keygen_stage != 0 || s->hide_input || s->worker_mode == WORKER_NC ||
+	       s->more_active;
 }
 
 /* sshd start [port] | stop | status */
@@ -11158,8 +11324,10 @@ static void scp_upload_glob(int idx)
 		/* resolve file size */
 		spec.vRefNum = s->scp_glob_vRefNum;
 		spec.parID = s->scp_glob_dirID;
-		spec.name[0] = name[0];
-		memcpy(spec.name + 1, name + 1, name[0]);
+		/* clamp to the FSSpec name field (HFS names are at most 31, but
+		   don't trust a file system to say so) */
+		spec.name[0] = (unsigned char)name[0] > sizeof(spec.name) - 1 ? sizeof(spec.name) - 1 : name[0];
+		memcpy(spec.name + 1, name + 1, spec.name[0]);
 
 		ferr = FSpOpenDF(&spec, fsRdPerm, &ref);
 		if (ferr != noErr)
@@ -11675,6 +11843,536 @@ static void fsspec_to_path(FSSpec* spec, char* out, int maxlen)
 	}
 }
 
+/* ------------------------------------------------------------------ */
+/* open, which, apps: applications and what opens what                */
+/*                                                                    */
+/* Every file has a type and a creator (four-letter codes). The       */
+/* creator names the application that owns it. The Finder keeps a    */
+/* Desktop Database on each disk that maps a creator to where that    */
+/* application is; open asks it, as double-clicking does. Applications */
+/* are found by name with a catalog search (what Find File uses).     */
+/* ------------------------------------------------------------------ */
+
+static void ostype_str(OSType t, char out[5])
+{
+	int i;
+	for (i = 0; i < 4; i++)
+	{
+		char c = (char)((t >> (24 - 8 * i)) & 0xFF);
+		out[i] = (c >= 32 && c < 127) ? c : '?';
+	}
+	out[4] = '\0';
+}
+
+static int parse_ostype(const char* s, OSType* t)
+{
+	int i;
+	if (strlen(s) != 4) return 0;
+	*t = 0;
+	for (i = 0; i < 4; i++) *t = (*t << 8) | (unsigned char)s[i];
+	return 1;
+}
+
+/* mounted volumes, the startup disk first; returns how many */
+static int app_volumes(short* vrefs, int max)
+{
+	short sys_vref;
+	long sys_dir;
+	int n = 0, i;
+	if (FindFolder(kOnSystemDisk, kSystemFolderType, kDontCreateFolder, &sys_vref, &sys_dir) == noErr)
+		vrefs[n++] = sys_vref;
+	for (i = 1; n < max; i++)
+	{
+		HParamBlockRec pb;
+		int k, dup = 0;
+		memset(&pb, 0, sizeof pb);
+		pb.volumeParam.ioVolIndex = i;
+		if (PBHGetVInfoSync(&pb) != noErr) break;
+		for (k = 0; k < n; k++) if (vrefs[k] == pb.volumeParam.ioVRefNum) dup = 1;
+		if (!dup) vrefs[n++] = pb.volumeParam.ioVRefNum;
+	}
+	return n;
+}
+
+static int is_app(const FSSpec* spec)
+{
+	FInfo fi;
+	return FSpGetFInfo(spec, &fi) == noErr &&
+	       (fi.fdType == 'APPL' || fi.fdType == 'APPC' || fi.fdType == 'FNDR');   /* FNDR: the Finder */
+}
+
+/* the Desktop Database on vref: where is the application with this creator?
+   Entries can be stale (an application moved or deleted), so each one is
+   checked; returns 1 with *app set to one that exists */
+static int dtdb_lookup(short vref, OSType creator, FSSpec* app)
+{
+	DTPBRec dt;
+	short idx;
+	memset(&dt, 0, sizeof dt);
+	dt.ioVRefNum = vref;
+	if (PBDTGetPath(&dt) != noErr) return 0;
+	for (idx = 0; idx < 16; idx++)
+	{
+		Str255 name;
+		short dtref = dt.ioDTRefNum;
+		memset(&dt, 0, sizeof dt);
+		dt.ioDTRefNum = dtref;
+		dt.ioNamePtr = name;
+		dt.ioIndex = idx;
+		dt.ioFileCreator = creator;
+		if (PBDTGetAPPLSync(&dt) != noErr) break;
+		if (FSMakeFSSpec(vref, dt.ioAPPLParID, name, app) == noErr && is_app(app))
+			return 1;
+	}
+	return 0;
+}
+
+/* an application by creator, on any disk (the startup disk first) */
+static int app_find_by_creator(OSType creator, FSSpec* app)
+{
+	short vrefs[16];
+	int n = app_volumes(vrefs, 16), i;
+	for (i = 0; i < n; i++)
+		if (dtdb_lookup(vrefs[i], creator, app)) return 1;
+	return 0;
+}
+
+/* catalog search on one volume for applications, optionally with this exact
+   name (any case). Calls found() for each; stops when it returns 0. */
+static int app_search_volume(short vref, const char* name,
+                             int (*found)(const FSSpec*, void*), void* ctx)
+{
+	HParamBlockRec vp;
+	GetVolParmsInfoBuffer parms;
+	CSParam cs;
+	CInfoPBRec spec1, spec2;
+	FSSpec matches[16];
+	Str255 pname;
+	OSErr e;
+	int k;
+
+	memset(&vp, 0, sizeof vp);
+	vp.ioParam.ioVRefNum = vref;
+	vp.ioParam.ioBuffer = (Ptr)&parms;
+	vp.ioParam.ioReqCount = sizeof parms;
+	if (PBHGetVolParmsSync(&vp) != noErr || !(parms.vMAttrib & (1L << bHasCatSearch)))
+		return 1;
+
+	memset(&cs, 0, sizeof cs);
+	memset(&spec1, 0, sizeof spec1);
+	memset(&spec2, 0, sizeof spec2);
+	cs.ioVRefNum = vref;
+	cs.ioMatchPtr = matches;
+	cs.ioReqMatchCount = 16;
+	cs.ioSearchInfo1 = &spec1;
+	cs.ioSearchInfo2 = &spec2;
+	cs.ioSearchBits = fsSBFlAttrib | fsSBFlFndrInfo;
+	spec1.hFileInfo.ioFlAttrib = 0;            /* files only (not folders) */
+	spec2.hFileInfo.ioFlAttrib = ioDirMask;
+	spec1.hFileInfo.ioFlFndrInfo.fdType = 'APPL';
+	spec2.hFileInfo.ioFlFndrInfo.fdType = 0xFFFFFFFF;
+	if (name)
+	{
+		int nl = strlen(name);
+		if (nl < 1 || nl > 31) return 1;
+		pname[0] = nl;
+		memcpy(pname + 1, name, nl);
+		spec1.hFileInfo.ioNamePtr = pname;
+		cs.ioSearchBits |= fsSBFullName;
+	}
+	do
+	{
+		e = PBCatSearchSync(&cs);
+		if (e == catChangedErr)                 /* disk changed: start over */
+		{
+			memset(&cs.ioCatPosition, 0, sizeof cs.ioCatPosition);
+			continue;
+		}
+		for (k = 0; k < cs.ioActMatchCount; k++)
+			if (!found(&matches[k], ctx)) return 0;
+		YieldToAnyThread();
+	} while (e == noErr);
+	return 1;
+}
+
+static int found_first(const FSSpec* spec, void* ctx)
+{
+	*(FSSpec*)ctx = *spec;
+	return 0;                                   /* stop: one is enough */
+}
+
+/* an application by name, on any disk (the startup disk first) */
+static int app_find_by_name(const char* name, FSSpec* app)
+{
+	short vrefs[16];
+	int n = app_volumes(vrefs, 16), i;
+	app->name[0] = 0;
+	for (i = 0; i < n; i++)
+	{
+		app_search_volume(vrefs[i], name, found_first, app);
+		if (app->name[0]) return 1;
+	}
+	return 0;
+}
+
+/* is an application running? by its file, or (if app is NULL) its creator */
+static int app_running(const FSSpec* app, OSType creator, ProcessSerialNumber* psn)
+{
+	ProcessInfoRec info;
+	FSSpec spec;
+	psn->highLongOfPSN = 0;
+	psn->lowLongOfPSN = kNoProcess;
+	while (GetNextProcess(psn) == noErr)
+	{
+		memset(&info, 0, sizeof info);
+		info.processInfoLength = sizeof info;
+		info.processAppSpec = &spec;
+		if (GetProcessInformation(psn, &info) != noErr) continue;
+		if (app ? (spec.vRefNum == app->vRefNum && spec.parID == app->parID &&
+		           EqualString(spec.name, app->name, false, true))
+		        : info.processSignature == creator)
+			return 1;
+	}
+	return 0;
+}
+
+/* a running program with this creator: where its file is */
+static int app_running_spec(OSType creator, FSSpec* app)
+{
+	ProcessSerialNumber psn;
+	ProcessInfoRec info;
+	if (!app_running(NULL, creator, &psn)) return 0;
+	memset(&info, 0, sizeof info);
+	info.processInfoLength = sizeof info;
+	info.processAppSpec = app;
+	return GetProcessInformation(&psn, &info) == noErr;
+}
+
+/* launch app (or bring it to the front), opening doc in it if given */
+static OSErr app_open(const FSSpec* app, const FSSpec* doc)
+{
+	ProcessSerialNumber psn;
+	AppleEvent event = { typeNull, NULL };
+	AEDescList list = { typeNull, NULL };
+	AEAddressDesc target = { typeNull, NULL };
+	AEDesc params = { typeNull, NULL };
+	OSErr e = noErr;
+	int running = app_running(app, 0, &psn);
+
+	if (doc)
+	{
+		/* an "open documents" Apple Event naming the file */
+		if (running)
+			e = AECreateDesc(typeProcessSerialNumber, &psn, sizeof psn, &target);
+		else
+		{
+			OSType none = 0;
+			e = AECreateDesc(typeApplSignature, &none, sizeof none, &target);
+		}
+		if (e == noErr) e = AECreateAppleEvent(kCoreEventClass, kAEOpenDocuments, &target,
+		                                       kAutoGenerateReturnID, kAnyTransactionID, &event);
+		if (e == noErr) e = AECreateList(NULL, 0, false, &list);
+		if (e == noErr) e = AEPutPtr(&list, 1, typeFSS, doc, sizeof(FSSpec));
+		if (e == noErr) e = AEPutParamDesc(&event, keyDirectObject, &list);
+	}
+	if (e == noErr)
+	{
+		if (running)
+		{
+			if (doc)
+			{
+				AppleEvent reply = { typeNull, NULL };
+				e = AESend(&event, &reply, kAENoReply, kAENormalPriority, kAEDefaultTimeout, NULL, NULL);
+				AEDisposeDesc(&reply);
+			}
+			SetFrontProcess(&psn);
+		}
+		else
+		{
+			LaunchParamBlockRec lpb;
+			memset(&lpb, 0, sizeof lpb);
+			lpb.launchBlockID = extendedBlock;
+			lpb.launchEPBLength = extendedBlockLen;
+			lpb.launchAppSpec = (FSSpecPtr)app;
+			lpb.launchControlFlags = launchContinue | launchNoFileFlags;
+			if (doc)
+			{
+				/* the event goes to the application as it starts */
+				e = AECoerceDesc(&event, typeAppParameters, &params);
+				if (e == noErr)
+				{
+					HLock(params.dataHandle);
+					lpb.launchAppParameters = (AppParametersPtr)*params.dataHandle;
+					lpb.launchControlFlags = launchContinue;
+				}
+			}
+			if (e == noErr) e = LaunchApplication(&lpb);
+		}
+	}
+	AEDisposeDesc(&params);
+	AEDisposeDesc(&list);
+	AEDisposeDesc(&event);
+	AEDisposeDesc(&target);
+	return e;
+}
+
+/* ask the (always running) Finder to open a folder in a window */
+static OSErr finder_open(const FSSpec* folder)
+{
+	ProcessSerialNumber psn;
+	AppleEvent event = { typeNull, NULL }, reply = { typeNull, NULL };
+	AEDescList list = { typeNull, NULL };
+	AEAddressDesc target = { typeNull, NULL };
+	OSErr e;
+	if (!app_running(NULL, 'MACS', &psn)) return procNotFound;
+	e = AECreateDesc(typeProcessSerialNumber, &psn, sizeof psn, &target);
+	if (e == noErr) e = AECreateAppleEvent(kCoreEventClass, kAEOpenDocuments, &target,
+	                                       kAutoGenerateReturnID, kAnyTransactionID, &event);
+	if (e == noErr) e = AECreateList(NULL, 0, false, &list);
+	if (e == noErr) e = AEPutPtr(&list, 1, typeFSS, folder, sizeof(FSSpec));
+	if (e == noErr) e = AEPutParamDesc(&event, keyDirectObject, &list);
+	if (e == noErr) e = AESend(&event, &reply, kAENoReply, kAENormalPriority, kAEDefaultTimeout, NULL, NULL);
+	if (e == noErr) SetFrontProcess(&psn);
+	AEDisposeDesc(&reply);
+	AEDisposeDesc(&list);
+	AEDisposeDesc(&event);
+	AEDisposeDesc(&target);
+	return e;
+}
+
+static void print_app_path(int idx, const char* prefix, const FSSpec* app)
+{
+	char path[512];
+	fsspec_to_path((FSSpec*)app, path, sizeof path);
+	printf_s(idx, "%s%s\r\n", prefix, path);
+}
+
+/* find the application for a name: a path to one, or an application's name */
+static int app_resolve(int idx, const char* what, FSSpec* app)
+{
+	if (resolve_path_alias(idx, what, app) == noErr && is_app(app))
+		return 1;
+	if (strchr(what, '/') == NULL && app_find_by_name(what, app))
+		return 1;
+	return 0;
+}
+
+static void cmd_open(int idx, int argc, char* argv[])
+{
+	FSSpec spec, app;
+	CInfoPBRec pb;
+	OSErr e;
+	const char* with = NULL;
+	const char* target;
+	int ai = 1;
+	char t[5], c[5];
+
+	if (argc >= 3 && strcmp(argv[1], "-a") == 0) { with = argv[2]; ai = 3; }
+	if (ai >= argc && !with)
+	{
+		vt_write(idx, "usage: open <file, folder or application>\r\n"
+		              "       open -a <application> [file]\r\n");
+		shell_set_status(idx, 1);
+		return;
+	}
+	if (with)
+	{
+		if (!app_resolve(idx, with, &app))
+		{
+			printf_s(idx, "open: no application called %s\r\n", with);
+			shell_set_status(idx, 1);
+			return;
+		}
+		if (ai >= argc)
+			e = app_open(&app, NULL);
+		else if (resolve_path_alias(idx, argv[ai], &spec) != noErr)
+		{
+			printf_s(idx, "open: not found: %s\r\n", argv[ai]);
+			shell_set_status(idx, 1);
+			return;
+		}
+		else
+			e = app_open(&app, &spec);
+		if (e != noErr) { printf_s(idx, "open: couldn't open it (error %d)\r\n", (int)e); shell_set_status(idx, 1); }
+		return;
+	}
+
+	target = argv[ai];
+	if (resolve_path_alias(idx, target, &spec) != noErr)
+	{
+		/* not a path: an application's name, from anywhere */
+		if (strchr(target, '/') == NULL && app_find_by_name(target, &app))
+		{
+			e = app_open(&app, NULL);
+			if (e != noErr) { printf_s(idx, "open: couldn't start it (error %d)\r\n", (int)e); shell_set_status(idx, 1); }
+			return;
+		}
+		printf_s(idx, "open: not found: %s\r\n", target);
+		shell_set_status(idx, 1);
+		return;
+	}
+
+	/* a folder: the Finder opens a window on it */
+	memset(&pb, 0, sizeof pb);
+	pb.hFileInfo.ioNamePtr = spec.name;
+	pb.hFileInfo.ioVRefNum = spec.vRefNum;
+	pb.hFileInfo.ioDirID = spec.parID;
+	if (PBGetCatInfoSync(&pb) == noErr && (pb.hFileInfo.ioFlAttrib & ioDirMask))
+	{
+		if ((e = finder_open(&spec)) != noErr)
+		{
+			printf_s(idx, "open: couldn't ask the Finder to open the folder (error %d)\r\n", (int)e);
+			shell_set_status(idx, 1);
+		}
+		return;
+	}
+
+	if (is_app(&spec))
+	{
+		e = app_open(&spec, NULL);
+		if (e != noErr) { printf_s(idx, "open: couldn't start it (error %d)\r\n", (int)e); shell_set_status(idx, 1); }
+		return;
+	}
+
+	/* a document: its creator's application, as double-clicking does */
+	ostype_str(pb.hFileInfo.ioFlFndrInfo.fdType, t);
+	ostype_str(pb.hFileInfo.ioFlFndrInfo.fdCreator, c);
+	if (!app_find_by_creator(pb.hFileInfo.ioFlFndrInfo.fdCreator, &app))
+	{
+		/* plain text with no known application: SimpleText reads it */
+		if (pb.hFileInfo.ioFlFndrInfo.fdType == 'TEXT' &&
+		    (app_find_by_creator('ttxt', &app) || app_find_by_name("SimpleText", &app)))
+			;
+		else
+		{
+			printf_s(idx, "open: no application found for creator '%s' (type '%s')\r\n"
+			              "      try: open -a <application> %s\r\n", c, t, target);
+			shell_set_status(idx, 1);
+			return;
+		}
+	}
+	e = app_open(&app, &spec);
+	if (e != noErr) { printf_s(idx, "open: couldn't open it (error %d)\r\n", (int)e); shell_set_status(idx, 1); }
+}
+
+/* which <application name or path> | which -c <creator> */
+static void cmd_which(int idx, int argc, char** argv)
+{
+	FSSpec app;
+	OSType creator;
+
+	if (argc == 3 && strcmp(argv[1], "-c") == 0)
+	{
+		if (!parse_ostype(argv[2], &creator))
+		{
+			vt_write(idx, "which: a creator is four characters, such as ttxt\r\n");
+			shell_set_status(idx, 1);
+			return;
+		}
+		if (app_find_by_creator(creator, &app))
+			print_app_path(idx, "", &app);
+		else if (app_running_spec(creator, &app))      /* e.g. the Finder: running, not in the database */
+			print_app_path(idx, "", &app);
+		else
+		{
+			printf_s(idx, "which: no application with creator '%s' in the Desktop Database\r\n", argv[2]);
+			shell_set_status(idx, 1);
+		}
+		return;
+	}
+	if (argc != 2)
+	{
+		vt_write(idx, "usage: which <application>   or   which -c <creator>\r\n");
+		shell_set_status(idx, 1);
+		return;
+	}
+	if (app_resolve(idx, argv[1], &app))
+		print_app_path(idx, "", &app);
+	else
+	{
+		printf_s(idx, "which: no application called %s\r\n", argv[1]);
+		shell_set_status(idx, 1);
+	}
+}
+
+/* apps [word]: every application on every disk, with its creator and what
+   the Desktop Database says about that creator */
+struct apps_ctx
+{
+	int idx;
+	const char* word;
+	char* text;                 /* the listing, one line after another */
+	long len, cap;
+	int count;
+};
+
+static int apps_found(const FSSpec* spec, void* vctx)
+{
+	struct apps_ctx* a = (struct apps_ctx*)vctx;
+	FInfo fi;
+	FSSpec db;
+	char path[512], c[5], line[600];
+	const char* status;
+	int n;
+
+	if (a->count >= 400) return 0;
+	fsspec_to_path((FSSpec*)spec, path, sizeof path);
+	if (a->word && !stristr(path, a->word)) return 1;
+	if (FSpGetFInfo(spec, &fi) != noErr) return 1;
+	ostype_str(fi.fdCreator, c);
+	if (!dtdb_lookup(spec->vRefNum, fi.fdCreator, &db))
+		status = "not in the database";
+	else if (db.parID == spec->parID && EqualString(db.name, spec->name, false, true))
+		status = "database";
+	else
+		status = "database has another copy";
+	n = snprintf(line, sizeof line, "%s  %-26s  %s", c, status, path);
+	if (n < 0) return 1;
+	if (n > (int)sizeof line - 1) n = sizeof line - 1;
+	if (a->len + n + 1 > a->cap) return 0;
+	memcpy(a->text + a->len, line, n);
+	a->len += n;
+	a->text[a->len++] = '\n';
+	a->count++;
+	return 1;
+}
+
+static void cmd_apps(int idx, int argc, char** argv)
+{
+	struct apps_ctx a;
+	short vrefs[16];
+	int nv, i;
+	const char** lines;
+	long k, nl = 0, start = 0;
+
+	memset(&a, 0, sizeof a);
+	a.idx = idx;
+	a.word = argc >= 2 ? argv[1] : NULL;
+	a.cap = 400L * 160;
+	a.text = NewPtr(a.cap);
+	if (a.text == NULL) { vt_write(idx, "apps: out of memory\r\n"); shell_set_status(idx, 1); return; }
+	nv = app_volumes(vrefs, 16);
+	for (i = 0; i < nv; i++)
+		if (!app_search_volume(vrefs[i], NULL, apps_found, &a)) break;
+	if (a.count == 0)
+	{
+		vt_write(idx, a.word ? "apps: no applications match\r\n" : "apps: no applications found\r\n");
+		DisposePtr(a.text);
+		return;
+	}
+	lines = (const char**)NewPtr((a.count + 2) * sizeof(char*));
+	if (lines == NULL) { DisposePtr(a.text); vt_write(idx, "apps: out of memory\r\n"); return; }
+	lines[nl++] = "CREA  DESKTOP DATABASE            APPLICATION";
+	for (k = 0; k < a.len; k++)
+		if (a.text[k] == '\n')
+		{
+			a.text[k] = '\0';
+			lines[nl++] = a.text + start;
+			start = k + 1;
+		}
+	shell_paged_write_own(idx, lines, (int)nl, a.text, 1);
+}
+
 static void cmd_realpath(int idx, int argc, char** argv)
 {
 	FSSpec spec;
@@ -11731,33 +12429,6 @@ static void cmd_hostname(int idx, int argc, char** argv)
 /* ------------------------------------------------------------------ */
 /* which - find an application by name                                */
 /* ------------------------------------------------------------------ */
-
-static void cmd_which(int idx, int argc, char** argv)
-{
-	FSSpec spec;
-	FInfo finfo;
-	OSErr e;
-	char path[512];
-
-	if (argc < 2)
-	{
-		vt_write(idx, "usage: which <command>\r\n");
-		return;
-	}
-
-	/* try to resolve the argument as a path */
-	e = resolve_path_alias(idx, argv[1], &spec);
-	if (e == noErr && FSpGetFInfo(&spec, &finfo) == noErr && finfo.fdType == 'APPL')
-	{
-		fsspec_to_path(&spec, path, sizeof(path));
-		vt_write(idx, path);
-		vt_write(idx, "\r\n");
-		return;
-	}
-
-	vt_write(idx, argv[1]);
-	vt_write(idx, ": not found\r\n");
-}
 
 /* ------------------------------------------------------------------ */
 /* ln -s / readlink - Mac alias creation and resolution               */
@@ -11947,10 +12618,19 @@ static int man_show(int idx, const char* name)
 	memcpy(pn + 1, name, n);
 	h = GetNamedResource('TEXT', pn);
 	if (h == NULL) return 0;
+	/* man pages are purgeable resources: keep this one in memory while it
+	   is copied, or the NewPtr below could purge it and leave *h NULL */
+	HNoPurge(h);
 	size = GetHandleSize(h);
 
 	text = NewPtr(size + 1);
-	if (text == NULL) { ReleaseResource(h); return 0; }
+	if (text == NULL || *h == NULL)
+	{
+		if (text) DisposePtr(text);
+		HPurge(h);
+		ReleaseResource(h);
+		return 0;
+	}
 	memcpy(text, *h, size);
 	text[size] = '\0';
 	ReleaseResource(h);
@@ -11971,9 +12651,7 @@ static int man_show(int idx, const char* name)
 		}
 	if (start < size) lines[nlines++] = text + start;
 
-	shell_paged_write(idx, lines, nlines);
-	DisposePtr((Ptr)lines);
-	DisposePtr(text);
+	shell_paged_write_own(idx, lines, nlines, text, 1);   /* the pager frees them */
 	return 1;
 }
 
@@ -12035,11 +12713,12 @@ static void cmd_help(int idx, int argc, char* argv[])
 		"'man macshell' covers paths, wildcards, > and >>, and keys.",
 		"",
 		"Files      ls cd pwd cat head tail cp mv rm mkdir rmdir touch ln readlink",
-		"           realpath basename dirname which open",
+		"           realpath basename dirname",
 		"Text       grep wc nl cut fold rev rot13 strings echo seq",
 		"           dos2unix unix2dos mac2unix unix2mac",
 		"Bytes      hexdump xxd cmp md5sum sha1sum sha256sum sha512sum crc32",
 		"Mac files  getinfo chown settype setcreator fixtype chmod chattr label",
+		"Apps       open which apps",
 		"System     date cal uptime uname hostname df free ps history sleep clear",
 		"           colors",
 		"Network    ssh ssh-keygen sshd scp ftp wget curl telnet nc ping traceroute",
@@ -12112,7 +12791,7 @@ static int escape_and_append(char* line, int pos, int max, const char* src, int 
 }
 
 static const char* shell_commands[] = {
-	"basename", "cal", "cat", "cd", "chattr", "chmod", "chown", "clear",
+	"apps", "basename", "cal", "cat", "cd", "chattr", "chmod", "chown", "clear",
 	"cls", "cmp", "colors", "copy", "cp", "crc32", "curl", "cut", "date", "del",
 	"dig",
 	"delete", "df", "dir", "dirname", "dos2unix", "echo", "entropy", "exit", "file",
@@ -12707,7 +13386,7 @@ static void shell_run_chain(int idx)
 {
 	struct session* s = &sessions[idx];
 	while (s->in_use && s->pending_line[0] && !local_shell_worker_active(s) &&
-	       s->ftp_mode == FTP_MODE_OFF && s->keygen_stage == 0)
+	       s->ftp_mode == FTP_MODE_OFF && s->keygen_stage == 0 && !s->more_active)
 	{
 		char cmd[256], rest[512];
 		const char* p = s->pending_line;
@@ -12717,6 +13396,13 @@ static void shell_run_chain(int idx)
 		if (p[0] == ';') p++;
 		else if (p[0] == '&' && p[1] == '&') { p += 2; and_op = 1; }
 		r = split_chain(p, cmd, sizeof cmd);
+		if ((r ? r - p : (long)strlen(p)) > (long)sizeof cmd - 1)
+		{
+			vt_write(idx, "macshell: command too long\r\n");
+			shell_set_status(idx, 1);
+			s->pending_line[0] = '\0';
+			break;
+		}
 		if (r) copy_cstr_trunc(rest, sizeof rest, r); else rest[0] = '\0';
 		copy_cstr_trunc(s->pending_line, sizeof s->pending_line, rest);
 		if (and_op && s->last_status != 0)
@@ -12737,7 +13423,7 @@ void shell_tick(void)
 	{
 		struct session* s = &sessions[i];
 		if (!s->in_use || s->type != SESSION_LOCAL || !s->pending_line[0]) continue;
-		if (local_shell_worker_active(s) || s->thread_state == OPEN) continue;
+		if (local_shell_worker_active(s) || s->thread_state == OPEN || s->more_active) continue;
 		shell_run_chain(i);
 		if (!s->pending_line[0] && !local_shell_worker_active(s))
 			shell_prompt(i);
@@ -12761,6 +13447,15 @@ static void shell_execute(int idx, char* line)
 		return;
 	}
 	rest = split_chain(line, first, sizeof first);
+	/* refuse rather than cut off: a line run over ssh can be longer than the
+	   queue for the rest of a ; / && line, or than one command */
+	if ((rest && (long)strlen(rest) >= (long)sizeof s->pending_line) ||
+	    (rest ? rest - line : (long)strlen(line)) > (long)sizeof first - 1)
+	{
+		vt_write(idx, "macshell: command line too long\r\n");
+		shell_set_status(idx, 1);
+		return;
+	}
 	if (rest == NULL)
 	{
 		shell_execute_one(idx, line);
@@ -12910,6 +13605,7 @@ static void shell_execute_one(int idx, char* line)
 	else if (strcmp(cmd, "realpath") == 0) cmd_realpath(idx, argc, argv);
 	else if (strcmp(cmd, "hostname") == 0) cmd_hostname(idx, argc, argv);
 	else if (strcmp(cmd, "which") == 0)    cmd_which(idx, argc, argv);
+	else if (strcmp(cmd, "apps") == 0)     cmd_apps(idx, argc, argv);
 	else if (strcmp(cmd, "ln") == 0)       cmd_ln(idx, argc, argv);
 	else if (strcmp(cmd, "readlink") == 0) cmd_readlink(idx, argc, argv);
 	else if (strcmp(cmd, "wget") == 0)     cmd_wget(idx, argc, argv);
@@ -12939,8 +13635,10 @@ static void shell_execute_one(int idx, char* line)
 		FSSpec spec;
 		FInfo finfo;
 		OSErr e = resolve_path_alias(idx, cmd, &spec);
-		if (e == noErr && FSpGetFInfo(&spec, &finfo) == noErr
-			&& finfo.fdType == 'APPL')
+		/* a file's name or path typed as a command opens it, as
+		   double-clicking it in the Finder does (an application starts,
+		   a document opens in its application) */
+		if (e == noErr && FSpGetFInfo(&spec, &finfo) == noErr)
 		{
 			char* open_argv[2];
 			open_argv[0] = "open";
@@ -12971,8 +13669,8 @@ void shell_prompt(int idx)
 	char esc[20];
 	int c = prefs.prompt_color;
 
-	/* the rest of a ; / && line is still to run */
-	if (s->pending_line[0])
+	/* the rest of a ; / && line is still to run, or --more-- is waiting */
+	if (s->pending_line[0] || s->more_active)
 		return;
 
 	/* a one-off command run for ssh: no prompt when it finishes */
@@ -13190,6 +13888,13 @@ void shell_input(int session_idx, unsigned char c, int modifiers, unsigned char 
 			shell_prompt(session_idx);
 			return;
 		}
+		return;
+	}
+
+	/* --more-- is showing: the key belongs to the pager */
+	if (s->more_active)
+	{
+		shell_more_key(session_idx, (c == 3 && vkeycode == 0x4C) ? '\r' : c);
 		return;
 	}
 

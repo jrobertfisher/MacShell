@@ -19,9 +19,12 @@ int ssh_key_folder(short* vRefNum, long* dirID, int create);
 void shell_run_line(int idx, char* line);
 int shell_is_busy(int idx);
 void shell_tick(void);
+void shell_more_free(int idx);
+void shell_free_session(int idx);
 void shell_note_output(int idx, const char* t);
 void shell_set_status(int idx, int status);
 
 /* dns.c */
 void cmd_dig(int idx, int argc, char* argv[]);
 void cmd_nslookup(int idx, int argc, char* argv[]);
+int dns_resolve(int idx, const char* cmd, const char* name, InetHost* addr);
