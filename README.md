@@ -11,7 +11,7 @@ What it does
   `cd -`, `/` for the list of disks), tab completion, history, wildcards, `;` and `&&`, `>` and
   `>>`, and an exit status for every command. Every command has a manual page (`man ls`,
   `ls --help`, `man -k word`).
-* **SSH both ways.** Log in to other computers with `ssh user@host`, using a key made on the Mac
+* **SSH client and server.** Log in to other computers with `ssh user@host`, using a key made on the Mac
   with `ssh-keygen`, or a password. Copy files with `scp`. Run `sshd start` and other computers
   can log in to the Mac with a key, for an interactive shell or a single command.
 * **File transfer that keeps Mac files whole.** An interactive FTP client (`ftp host`, passive or
@@ -21,9 +21,11 @@ What it does
   DNS queries, `host`, `ifconfig`, `nc` and `telnet`.
 * **Mac file tools.** View and change type and creator codes, Finder labels, locked and invisible
   flags, and aliases; convert between Mac, Unix and DOS line endings.
-* **Current security.** libssh2 and mbedTLS 3.6 LTS, including the Terrapin "strict key exchange"
-  fix, with randomness gathered from the Mac's sound input and clock jitter and checked by health
-  tests (see [Randomness](#randomness)).
+* **Modern encryption.** SSH uses elliptic-curve (ECDH P-256, P-384, P-521) or Diffie-Hellman
+  key exchange, AES-GCM or AES-CTR encryption with HMAC-SHA-256/512 (encrypt-then-MAC), ECDSA and
+  RSA (SHA-2) keys, and strict key exchange against the Terrapin attack. HTTPS uses TLS 1.2. It is
+  built on current libssh2 and mbedTLS 3.6 LTS, with randomness gathered from the Mac's sound input
+  and clock jitter and checked by health tests (see [Randomness](#randomness)).
 * **A clean terminal.** White on black by default, with other colour schemes; 256 colours and true
   colour for programs that use them; windows and tabs; scrollback; copy and paste.
 
