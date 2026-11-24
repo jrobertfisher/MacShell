@@ -1336,9 +1336,13 @@ static void cmd_ls(int idx, int argc, char* argv[])
 			if (e != noErr) continue;
 			if (is_directory(&tspec))
 			{
-				vt_write(idx, "\r\n");
-				vt_write(idx, argv[argi]);
-				vt_write(idx, ":\r\n");
+				/* like ls elsewhere: a heading only when listing several things */
+				if (path_count > 1)
+				{
+					vt_write(idx, "\r\n");
+					vt_write(idx, argv[argi]);
+					vt_write(idx, ":\r\n");
+				}
 				ls_show_dir(idx, tspec.vRefNum, get_dir_id(&tspec),
 							long_fmt, show_all);
 			}
