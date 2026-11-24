@@ -41,9 +41,11 @@ DESCRIPTION
       ssh user@mac 'command' passes it back: 0 worked, 1 error, 127
       unknown command, 130 stopped with Ctrl+C.
 
-    Running applications
-      Type an application's path to open it: ./SimpleText or
-      "/Macintosh HD/Applications/SimpleText". See open.
+    Opening files and applications
+      Type a file's name or path to open it, as double-clicking it in
+      the Finder does: an application starts, a document opens in the
+      application that made it. open SimpleText starts an application by
+      name from any folder. See open, which and apps.
 
     Keys
       Tab               complete a command or file name

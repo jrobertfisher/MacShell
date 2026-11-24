@@ -1,15 +1,37 @@
 NAME
-    open - open an application
+    open - open a file, folder or application
 
 SYNOPSIS
-    open <application>
+    open <file, folder or application>
+    open -a <application> [file]
 
 DESCRIPTION
-    Starts an application. Typing an application's path, such as
-    ./SimpleText, does the same.
+    Opens things the way double-clicking them in the Finder does.
+
+    An application starts (or comes to the front if it is running). It
+    can be a path, or just its name: open SimpleText finds it on any
+    disk, from any folder.
+
+    A document opens in the application that owns it. Every Mac file
+    has a creator (a four-letter code, shown by getinfo) naming that
+    application, and the Finder's Desktop Database on each disk records
+    where each application is; open looks the creator up there. A text
+    file whose application isn't found opens in SimpleText.
+
+    A folder opens in a Finder window.
+
+    Typing a file's name or path as a command does the same as open:
+        notes.txt
+        ./SimpleText
+        "/Macintosh HD/Documents/Letter"
+
+    -a <application>   open the file in this application instead
 
 EXAMPLES
-    open "/Macintosh HD/Applications/SimpleText"
+    open SimpleText
+    open report.doc
+    open -a SimpleText ReadMe
+    open /Macintosh HD/Applications
 
 SEE ALSO
-    which, ps
+    which, apps, getinfo, setcreator

@@ -1,0 +1,28 @@
+NAME
+    apps - list the applications on every disk
+
+SYNOPSIS
+    apps [word]
+
+DESCRIPTION
+    Lists every application on every mounted disk (with a word, only
+    those whose path contains it), with its creator code and what the
+    Finder's Desktop Database says about that creator:
+
+      database                  this copy is the one the database
+                                knows, so documents with this creator
+                                open in it
+      database has another copy the database points to another copy of
+                                the application (which open uses)
+      not in the database       the database doesn't know this creator;
+                                its documents can't be opened by
+                                double-clicking. Rebuilding the desktop
+                                (hold Command-Option while the Mac
+                                starts) adds it.
+
+EXAMPLES
+    apps
+    apps Simple
+
+SEE ALSO
+    open, which, getinfo

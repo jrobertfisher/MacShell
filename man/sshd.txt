@@ -14,8 +14,17 @@ DESCRIPTION
 
     Logins use keys only, never passwords: the public key must be a line
     in ~/.ssh/authorized_keys on this Mac (ECDSA P-256 or RSA of 2048
-    bits or more). Ed25519 keys aren't supported. One connection at a
-XX
+    bits or more). Ed25519 keys aren't supported. Each line is the key
+    type, the key and an optional comment. A line starting with # is
+    ignored, so putting # in front of a key turns it off. OpenSSH's
+    options before the key type (restrict, from=, command= and so on)
+    aren't supported, and a key on such a line is refused (the log says
+    which line), so a key never gets more access than its line allows.
+    Only the first 64 KB of the file is read (about 350 keys).
+
+    One connection at a time. A login opens its own MacShell tab in the
+    background (your tab stays in front), which closes when the other
+    computer logs out. A command given to ssh runs without a tab:
         ssh user@mac 'ls -l'
 
     The first start makes this Mac's host key (ECDSA P-256), kept in

@@ -2,10 +2,13 @@ NAME
     uname - show the system
 
 SYNOPSIS
-    uname
+    uname [-a]
 
 DESCRIPTION
     Shows the Mac OS version and the processor.
+
+    -a   also shows MacShell's version and which code is running:
+         PowerPC (on a Power Mac) or 68k
 
 SEE ALSO
     hostname, free

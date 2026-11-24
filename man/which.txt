@@ -1,11 +1,25 @@
 NAME
-    which - check an application path
+    which - find an application
 
 SYNOPSIS
-    which <path>
+    which <application>
+    which -c <creator>
 
 DESCRIPTION
-    Prints the full path of an application, if path is one.
+    Prints the full path of an application. It can be a path, or just
+    an application's name, which is searched for on every disk (the
+    startup disk first).
+
+    -c <creator>   the application with this creator code (four
+                   letters, such as ttxt for SimpleText), as the
+                   Finder's Desktop Database records it. That is the
+                   application open uses for a document with that
+                   creator. A running program with that creator is
+                   found too (the Finder, MACS, isn't in the database).
+
+EXAMPLES
+    which SimpleText
+    which -c ttxt
 
 SEE ALSO
-    open, realpath
+    open, apps, getinfo

@@ -10,12 +10,12 @@ Requirements
 * **CPU**: 68020 or later (a 68030 or faster is recommended for SSH)
 * **RAM**: 3 MB for MacShell
 * **System**: 7.1 or later (before 7.5, the Thread Manager extension is needed)
-* **Network**: Open Transport for SSH, FTP, wget and curl. The local shell works without it.
+* **Network**: Open Transport for the network commands (ssh, sshd, ftp, wget, curl, ping and the
+  rest). The local shell works without it.
 
-MacShell is developed and tested in emulated Mac OS 9 (QEMU), where the test suite passes. It is
-meant for a Macintosh LC with a 68030 accelerator running System 7.5.3, but hasn't been tested on
-that hardware yet. The source also has a PowerPC build, which hasn't been built or
-tested yet.
+MacShell is developed and tested in emulated Mac OS 9.2.1 on PowerPC (QEMU), where all of the
+test suite passes, and runs on a Macintosh LC with a 68030 accelerator and System 7.5.3, where a
+shorter set of the tests has been run. MacShell.bin holds both the 68k and the PowerPC code.
 
 Download
 --------
@@ -26,7 +26,7 @@ MacShell's own `ftp get` or `wget`. Give MacShell at least 3 MB of memory (the d
 
 What it does
 ------------
-* **A real shell.** 95 commands with Unix-style paths (`/Macintosh HD/Documents`, `~`, `..`,
+* **A real shell.** 96 commands with Unix-style paths (`/Macintosh HD/Documents`, `~`, `..`,
   `cd -`, `/` for the list of disks), tab completion, history, wildcards, `;` and `&&`, `>` and
   `>>`, and an exit status for every command. Every command has a manual page (`man ls`,
   `ls --help`, `man -k word`).
@@ -34,13 +34,12 @@ What it does
   with `ssh-keygen`, or a password. Copy files with `scp`. Run `sshd start` and other computers
   can log in to the Mac with a key, for an interactive shell or a single command.
 * **Modern encryption.** SSH uses elliptic-curve (ECDH P-256, P-384, P-521) or Diffie-Hellman
-  key exchange, AES-GCM or AES-CTR encryption with HMAC-SHA-256/512 (encrypt-then-MAC), ECDSA and
-  RSA (SHA-2) keys, and strict key exchange against the Terrapin attack (the server uses ECDH
-  P-256, AES-128-CTR and HMAC-SHA-256). HTTPS uses TLS 1.2. It is
-  built on current libssh2 and mbedTLS 3.6 LTS. The keys' randomness comes from the Mac's sound
-  input and clock jitter, checked by health tests, plus a seed saved from the last run; if that
-  isn't enough, MacShell asks you to move the mouse and type a few keys (see
-  [Randomness](#randomness)).
+  key exchange; ChaCha20-Poly1305, AES-GCM, AES-CTR or (for old servers) AES-CBC encryption with
+  HMAC-SHA-256/512; ECDSA and RSA (SHA-2) keys; and strict key exchange against the Terrapin
+  attack. The server uses ECDH P-256, AES-128-CTR and HMAC-SHA-256 (encrypt-then-MAC). HTTPS
+  uses TLS 1.2. It is built on current libssh2 and mbedTLS 3.6 LTS. The keys' randomness comes
+  from mouse movement and keystrokes the first time, then from a seed saved by each run, with
+  sound input noise and clock jitter mixed in (see [Randomness](#randomness)).
 * **File transfer that keeps Mac files whole.** An interactive FTP client (`ftp host`, passive or
   active), `wget` and `curl` for the web, and `scp`. Files with a resource fork, such as
   applications, are sent as MacBinary, and MacBinary downloads are unpacked.
@@ -54,15 +53,17 @@ What it does
 Commands
 --------
 * **Files:** `ls`, `cd`, `pwd`, `cat`, `less`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `touch`, `ln`,
-  `readlink`, `realpath`, `basename`, `dirname`, `which`, `head`, `tail` (including `-f`), `file`
+  `readlink`, `realpath`, `basename`, `dirname`, `which` (finds applications by name or
+  creator), `head`, `tail` (including `-f`), `file`
 * **Text:** `grep`, `wc`, `cut`, `nl`, `fold`, `rev`, `rot13`, `strings`, `echo`, `seq`,
   `dos2unix`, `unix2dos`, `mac2unix`, `unix2mac`
 * **Bytes and checksums:** `hexdump`, `xxd`, `cmp`, `md5sum`, `sha1sum`, `sha256sum`, `sha512sum`,
   `crc32`
 * **Mac files:** `getinfo`, `settype`, `setcreator`, `chown`, `fixtype`, `chmod`, `chattr`,
-  `label`, `open`
+  `label`, `open` (documents open in their application, as double-clicking does; applications by
+  name from any folder), `apps` (every application and what the Desktop Database knows)
 * **System:** `ps`, `free`, `df`, `uname`, `uptime`, `date`, `cal`, `hostname`, `history`,
-  `sleep`, `clear`, `colors`, `entropy`
+  `sleep`, `clear`, `colors`, `entropy`, `exit`
 * **Network:** `ssh`, `ssh-keygen`, `sshd`, `scp`, `ftp`, `wget`, `curl`, `telnet`, `nc`, `ping`,
   `traceroute`, `host`, `dig`, `nslookup`, `ifconfig`
 * **Help:** `help`, `man`
@@ -74,17 +75,20 @@ Randomness
 SSH and HTTPS keys are only as strong as the random numbers behind them, and classic Mac OS has
 no random number source. MacShell gathers randomness from:
 
-1. **Sound input noise**: the lowest bits of the microphone or line input, which carry analogue
-   noise even with nothing plugged in.
-2. **Clock jitter**: tiny timing variations between the processor and the Mac's VIA timer.
+1. **You**: the first time, MacShell asks you to move the mouse and type a few keys (about five
+   seconds of movement). The installer can do this for you.
+2. **A seed file** ("MacShell Random Seed" in the Preferences folder), written at the end of each
+   run from everything gathered. It is used up when read, so no two runs start from the same
+   seed; after the first time you aren't asked again.
+3. **Sound input noise and clock jitter**: the lowest bits of the microphone or line input, and
+   timing variations between the processor and the Mac's VIA timer. These are always mixed in and
+   checked by health tests based on NIST SP 800-90B, but they don't count towards the 256 bits
+   needed, since an idle input can carry mains hum that looks random to those tests.
 
-Each source must pass health tests based on NIST SP 800-90B (repetition, proportion and prediction
-tests) and is credited conservatively; silence, hum and repeating patterns count for nothing. The
-results are mixed with SHA-256 and saved to a seed file ("MacShell Random Seed" in the Preferences
-folder), which is renewed on each launch.
+Everything is mixed with SHA-256. Type `entropy` to see where the randomness came from.
 
-If the sources and seed together give less than 256 bits, MacShell asks you to move the mouse and
-type a few keys. Type `entropy` to see where the randomness came from.
+If you copy a disk image to set up another Mac, delete "MacShell Random Seed" and "MacShell SSH
+Host Key" from its Preferences folder, so the two Macs don't share them.
 
 Paths
 -----
@@ -139,10 +143,12 @@ SSH keys and the SSH server
   `id_ecdsa.pub`), optionally protected by a passphrase. Put the public key in
   `~/.ssh/authorized_keys` on the servers you use; `ssh user@host` and `scp` then use it without
   asking for anything.
-* `sshd start` runs MacShell's own SSH server in its own tab, so another computer can log in with
+* `sshd start` runs MacShell's own SSH server (port 22, or `sshd start <port>`) in its own tab, so another computer can log in with
   `ssh user@mac` (an interactive shell in a new tab) or run one command with `ssh user@mac
   'command'`, which returns the command's exit status. It accepts keys only, from
-  `~/.ssh/authorized_keys` on the Mac (ECDSA P-256, or RSA of 2048 bits or more), uses ECDH
+  `~/.ssh/authorized_keys` on the Mac (ECDSA P-256, or RSA of 2048 bits or more; a line starting
+  with `#` is off, and OpenSSH key options such as `restrict` or `from=` aren't supported, so a key
+  on such a line is refused). It serves one connection at a time, uses ECDH
   P-256, AES-128-CTR with HMAC-SHA-256 and strict key exchange, and logs every connection and
   rejected key in `~/.sshd/logs/sshd.log` (never more than 512 KB). See `man sshd`.
 

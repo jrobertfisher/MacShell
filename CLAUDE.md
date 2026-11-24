@@ -1,16 +1,17 @@
-# SevenTTY
+# MacShell
 
-SSH client, local shell, and terminal emulator for classic Mac OS 7/8/9.
-Fork of [ssheven](https://github.com/cy384/ssheven) by cy384. GitHub: LXXero/SevenTTY
+Unix-style shell, SSH client and server, FTP/HTTP clients, network tools and terminal emulator for
+classic Mac OS 7/8/9. Forked from SevenTTY (LXXero/SevenTTY), itself a fork of
+[ssheven](https://github.com/cy384/ssheven) by cy384. GitHub: jrobertfisher/MacShell
 
 ## Build Environment
 
 ### Retro68 Cross-Compiler
 
-SevenTTY builds with [Retro68](https://github.com/autc04/Retro68/), a GCC cross-compiler for classic Macintosh. The toolchain lives at:
+MacShell builds with [Retro68](https://github.com/autc04/Retro68/), a GCC cross-compiler for classic Macintosh. The toolchain lives at:
 
 ```
-~/git/Retro68-build/toolchain/
+~/Retro68-build/toolchain/        (68k; the PPC toolchain is a separate build, ~/Retro68-build-ppc)
 ├── m68k-apple-macos/     # 68K toolchain
 │   └── cmake/retro68.toolchain.cmake
 └── powerpc-apple-macos/  # PPC toolchain
@@ -26,31 +27,32 @@ Always delete and recreate build directories when cmake config changes (target r
 ```bash
 # 68K build
 mkdir build-m68k && cd build-m68k
-cmake .. -DCMAKE_TOOLCHAIN_FILE=~/git/Retro68-build/toolchain/m68k-apple-macos/cmake/retro68.toolchain.cmake
+cmake .. -DCMAKE_TOOLCHAIN_FILE=~/Retro68-build/toolchain/m68k-apple-macos/cmake/retro68.toolchain.cmake
 cmake --build . --parallel $(nproc)
 
 # PPC build
 mkdir build-ppc && cd build-ppc
-cmake .. -DCMAKE_TOOLCHAIN_FILE=~/git/Retro68-build/toolchain/powerpc-apple-macos/cmake/retroppc.toolchain.cmake
+cmake .. -DCMAKE_TOOLCHAIN_FILE=~/Retro68-build-ppc/toolchain/powerpc-apple-macos/cmake/retroppc.toolchain.cmake
 cmake --build . --parallel $(nproc)
 
-# Fat binary (both architectures combined)
+# Fat binary (both architectures combined) -> build-fat/MacShell.bin
 ./build-fat.bash
 ```
 
-Build outputs: `SevenTTY.bin` (MacBinary), `SevenTTY.dsk` (HFS disk image), `SevenTTY.APPL` (raw application)
+Build outputs: `MacShell.bin` (MacBinary), `MacShell.dsk` (HFS disk image), `MacShell.APPL` (raw application).
+The installer is built from `installer/` (`MacShell Installer`).
 
 ### Deploy to QEMU Emulator
 
 ```bash
-hmount ~/git/quadra800/full-os8.1.hda
-hdel :SevenTTY 2>/dev/null
-hcopy -m build-m68k/SevenTTY.bin :
+hmount <your emulator's disk image>.hda
+hdel :MacShell 2>/dev/null
+hcopy -m build-m68k/MacShell.bin :
 humount
-# Then run: ~/git/quadra800/run.sh
+# Then start the emulator
 ```
 
-The `hcopy -m` flag reads MacBinary format. The embedded app name comes from the cmake target name (`SevenTTY`). Use `hls -l` to verify files on the HFS image.
+The `hcopy -m` flag reads MacBinary format. The embedded app name comes from the cmake target name (`MacShell`). Use `hls -l` to verify files on the HFS image.
 
 ## Dependencies (git submodules, built automatically)
 
@@ -58,7 +60,8 @@ The `hcopy -m` flag reads MacBinary format. The embedded app name comes from the
 - **opentransport-libssh2** — SSH library patched to use Open Transport instead of BSD sockets
 - **libvterm** — terminal emulator library (VT100/xterm), patched with cmake build
 
-Do NOT modify files inside these submodule directories.
+These are MacShell's own forks (jrobertfisher/MacShell-libssh2, MacShell-mbedtls, MacShell-libvterm).
+Change them there (commit in the submodule, push it), then commit the submodule bump here.
 
 ## Source File Layout
 
@@ -68,10 +71,13 @@ Do NOT modify files inside these submodule directories.
 | `app.h` | ~270 | All shared types: `struct session` (incl. `thread_id`), `struct window_context`, `struct console_metrics`, `struct preferences` |
 | `console.c` | ~1900 | Terminal drawing (color + fast mode), symbol font, 256-color/RGB, font metrics, scrollback, cursor, mouse selection, tab bar |
 | `console.h` | ~42 | Console function prototypes (incl. `output_callback`) |
-| `shell.c` | ~10400 | Local shell: 30+ commands (ls, cd, cat, cp, mv, rm, mkdir, ps, free, df, etc.), tab completion, history, FTP client, wget/scp file transfer |
+| `shell.c` | ~13600 | Local shell: 95 commands (ls, cd, cat, cp, mv, rm, mkdir, ps, free, df, etc.), tab completion, history, FTP client, wget/scp file transfer |
 | `shell.h` | ~12 | Shell function prototypes |
 | `telnet.c` | ~985 | Telnet and raw TCP (nc): OT connection, telnet IAC negotiation, read threads, inline nc |
 | `telnet.h` | ~17 | Telnet/nc function prototypes (incl. `tcp_output_callback`) |
+| `sshd.c` | ~1850 | SSH server (`sshd`): ECDH P-256, AES-128-CTR, HMAC-SHA-256-ETM, publickey auth from ~/.ssh/authorized_keys, one connection at a time |
+| `dns.c` / `dnsmsg.c` | ~350 / ~250 | dig, nslookup, host: DNS queries over UDP; dnsmsg.c builds and decodes messages (host-tested in tests/host) |
+| `macentropy.c` | ~480 | Randomness: seed file + mouse/keys credited; sound and jitter mixed in, health tested, not credited |
 | `net.c` | ~730 | SSH networking: Open Transport TCP, libssh2 session, read thread, known hosts, EAGAIN handling |
 | `net.h` | ~12 | Network function prototypes |
 | `debug.c` | ~200 | libssh2 and Open Transport error code to string conversion |
@@ -104,7 +110,7 @@ windows[MAX_WINDOWS=8]        sessions[MAX_SESSIONS=8]
 ```
 
 - Each window has its own tab bar and can hold multiple sessions
-- Sessions are `SESSION_SSH`, `SESSION_TELNET`, `SESSION_NETCAT` (threaded network I/O) or `SESSION_LOCAL` (shell interpreter)
+- Sessions are `SESSION_SSH`, `SESSION_TELNET` (threaded network I/O) or `SESSION_LOCAL` (shell interpreter); nc runs inside a local session
 - Telnet opens in a new tab; nc runs inline in the local shell session (same vterm, thread reads into it)
 - Convenience macros: `ACTIVE_WIN`, `ACTIVE_S` — use these to access current window/session
 - Helper functions: `find_window_context(WindowPtr)`, `window_for_session(idx)`, `active_session_global()`
@@ -120,7 +126,7 @@ Each `sb_cell` is 4 bytes (char, fg, bg, attrs) vs ~36 bytes for `VTermScreenCel
 
 ### Local Shell
 
-Shell commands are dispatched in `shell_execute()` via a long if/else chain (not a function table).
+Shell commands are dispatched in `shell_execute_one()` (chains with `;`/`&&` are split by `shell_execute()`) via a long if/else chain (not a function table).
 Each command is `static void cmd_foo(int idx, int argc, char* argv[])` where `idx` is the session index.
 
 Output goes through `vt_write(idx, str)` (null-terminated) and `vt_print_long(idx, num)`.
@@ -199,7 +205,7 @@ F2F2F2          <- foreground
 Converter: `tools/itermcolors2sttheme.py`
 
 ### Prefs Persistence (Resource Fork)
-- Prefs stored as `'PREF'` resource 128 in `System Folder:Preferences:SevenTTY Preferences`
+- Prefs stored as `'PREF'` resource 128 in `System Folder:Preferences:MacShell Preferences`
 - Binary `struct disk_prefs` — no text parsing, no field desync bugs
 - `save_prefs()`: `FSpCreateResFile` / `FSpOpenResFile` / `AddResource` / `WriteResource`
 - `load_prefs()`: `FSpOpenResFile` / `Get1Resource` / size+version check / `ReleaseResource`
@@ -263,7 +269,7 @@ Converter: `tools/itermcolors2sttheme.py`
 - **Scrollback color type fields**: `get_cell_scrolled()` and `sb_popline()` set `cell->fg.indexed.idx` but not the `type` field — type stayed 0 from memset, so `VTERM_COLOR_IS_INDEXED` returned false and all scrollback colors were lost. Fix: set `VTERM_COLOR_INDEXED` or `VTERM_COLOR_DEFAULT_FG/BG` type flags.
 - **extract_fg/bg false defaults**: `extract_fg` treated indexed color 7 as default, `extract_bg` treated indexed color 0 as default. This incorrectly converted explicit `\033[37m`/`\033[40m` ANSI colors to theme fg/bg. Fix: only use `VTERM_COLOR_IS_DEFAULT_FG/BG` flag check.
 - **Paul Millr bg = 000000**: Same as default dark palette, making theme load failures invisible. Use Adventure Time (bg=1E1C44) or Atelier Sulphurpool (bg=202746) to verify theme bg rendering.
-- **Corrupt prefs file**: If a buggy version saved garbled data, all subsequent loads are broken. Delete `System Folder:Preferences:SevenTTY Preferences` to reset.
+- **Corrupt prefs file**: If a buggy version saved garbled data, all subsequent loads are broken. Delete `System Folder:Preferences:MacShell Preferences` to reset.
 - **Reverse video sentinel leak**: `set_draw_bg()` only checked for `COLOR_DEFAULT_BG`, so when reverse video passed `COLOR_DEFAULT_FG` (0xFE), it fell through to `palette[0xFE & 0x0F]` = palette[14] = bright cyan. Fix: both `set_draw_fg` and `set_draw_bg` must handle both `COLOR_DEFAULT_FG` and `COLOR_DEFAULT_BG`.
 - **Indexed QuickDraw color bleed**: `draw_tab_bar()` used `BackColor(whiteColor)` which doesn't override the RGB fields on a CGrafPort after `RGBBackColor()` was used. Fix: use `RGBBackColor()`/`RGBForeColor()` everywhere, never indexed calls.
 - **Numpad Enter = Ctrl+C**: `kEnterCharCode` = 0x03 = ETX, same value as Ctrl+C. Shell's `if (c == 3)` caught numpad Enter. Fix: only treat 0x03 as Ctrl+C when `controlKey` modifier is set.
@@ -283,7 +289,7 @@ Converter: `tools/itermcolors2sttheme.py`
 
 ## Gotchas and Lessons Learned
 
-- **Memory is precious**: 2MB partition. Scrollback uses compact 4-byte cells, not full VTermScreenCells (would be ~950KB/session)
+- **Memory is precious**: 3MB partition (`APP_MINIMUM_PARTITION` in constants.r). Scrollback uses compact 4-byte cells, not full VTermScreenCells (would be ~950KB/session)
 - **Page keys as control chars**: `kPageDownCharCode` = 0x0C = form feed. Must intercept page up/down/home/end in `shell_input()` before they reach vterm
 - **Shift keys are separate bits**: `shiftKey` (0x0200) is left shift only. Must check `(shiftKey | rightShiftKey)` for both
 - **`hcopy -m` filename length**: HFS has a 31-char filename limit. If the source path is too long, copy to /tmp first with a shorter name
@@ -305,6 +311,6 @@ Converter: `tools/itermcolors2sttheme.py`
 - **autoKey batching cap**: Draining ALL pending autoKey events causes TUI list overshoot (sends too many arrows at once). Cap at 4 extra events per batch
 - **Charcode 3 = numpad Enter AND Ctrl+C**: Use vkeycode 0x4C to distinguish. Charcode 4 = End key AND Ctrl+D: use vkeycode 0x77 to distinguish. This applies to both SSH handler (app.c) and local shell (shell.c)
 - **session_reap_thread safety**: Never dispose the currently-running thread. Check `MacGetCurrentThread()` first. Handle `threadNotFoundErr` (thread already gone). Force-stop only as last resort
-- **Symbol font rendering**: `symbolfont.r` defines NFNT resources at IDs 29183-29189. Font family FOND at ID 29183, name "SevenTTY Symbols". Uses a high random ID to avoid classic Mac font ID conflicts with system or third-party fonts. Glyph metrics must exactly match Monaco at each size for seamless tiling
+- **Symbol font rendering**: `symbolfont.r` defines NFNT resources at IDs 29183-29189. Font family FOND at ID 29183, name "MacShell Symbols". Uses a high random ID to avoid classic Mac font ID conflicts with system or third-party fonts. Glyph metrics must exactly match Monaco at each size for seamless tiling
 - **GWorld + SetGWorld GDevice parameter**: Always `SetGWorld(gw, window_gd)`, NEVER `SetGWorld(gw, NULL)`. NULL uses the GWorld's own GDevice (often clutType/indexed), causing Color2Index to use CLUT lookup instead of direct RGB. The window's GDevice is directType and gives correct color mapping. Get it with `GetGWorld(&saved_port, &saved_gd)` before switching. See Apple TN "Realistic Color for Real-World Applications" (1990)
 - **GWorld background fills**: Use `RGBBackColor()` + `EraseRect()`, not `PaintRect` + `PenPat(&qd.white)` hack. The PenPat trick doesn't work reliably in GWorlds with a foreign (window) GDevice. EraseRect works fine once the correct directType GDevice is active
