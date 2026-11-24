@@ -64,6 +64,7 @@ ENDIF()
 # Set the Finder's hasBundle flag so MacShell shows its own icon
 # (Retro68's Rez doesn't set it).
 add_custom_target(MacShell_bundle_flag ALL
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/scrub_build_paths.py MacShell.bin
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/set_bundle_bit.py MacShell.bin
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 add_dependencies(MacShell_bundle_flag MacShell_APPL)
