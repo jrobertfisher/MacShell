@@ -1698,12 +1698,19 @@ static void cmd_rm(int idx, int argc, char* argv[])
 	{
 		if (is_glob(argv[i]))
 		{
-			/* expand glob against current directory */
-			struct session* s = &sessions[idx];
+			/* expand the pattern in its folder (dir/*.txt) */
 			CInfoPBRec pb;
 			Str255 name;
 			short gi;
 			int matched = 0;
+			short gvref;
+			long gdir;
+			const char* gpat;
+			if (glob_resolve_dir(idx, argv[i], &gvref, &gdir, &gpat) != 0)
+			{
+				printf_s(idx, "rm: no such folder: %s\r\n", argv[i]);
+				continue;
+			}
 
 			for (gi = 1; ; gi++)
 			{
@@ -1714,8 +1721,8 @@ static void cmd_rm(int idx, int argc, char* argv[])
 
 				memset(&pb, 0, sizeof(pb));
 				pb.hFileInfo.ioNamePtr = name;
-				pb.hFileInfo.ioVRefNum = s->shell_vRefNum;
-				pb.hFileInfo.ioDirID = s->shell_dirID;
+				pb.hFileInfo.ioVRefNum = gvref;
+				pb.hFileInfo.ioDirID = gdir;
 				pb.hFileInfo.ioFDirIndex = gi;
 
 				if (PBGetCatInfoSync(&pb) != noErr) break;
@@ -1728,7 +1735,7 @@ static void cmd_rm(int idx, int argc, char* argv[])
 				/* skip directories */
 				if (pb.hFileInfo.ioFlAttrib & ioDirMask) continue;
 
-				if (!glob_match(argv[i], name_c)) continue;
+				if (!glob_match(gpat, name_c)) continue;
 
 				matched++;
 
@@ -1740,8 +1747,8 @@ static void cmd_rm(int idx, int argc, char* argv[])
 					if (!shell_confirm(idx)) continue;
 				}
 
-				fspec.vRefNum = s->shell_vRefNum;
-				fspec.parID = s->shell_dirID;
+				fspec.vRefNum = gvref;
+				fspec.parID = gdir;
 				fspec.name[0] = name[0];
 				memcpy(fspec.name + 1, name + 1, name[0]);
 
@@ -2263,6 +2270,14 @@ static void cmd_fixtype(int idx, int argc, char* argv[])
 	{
 		if (is_glob(argv[argi]))
 		{
+			short gvref;
+			long gdir;
+			const char* gpat;
+			if (glob_resolve_dir(idx, argv[argi], &gvref, &gdir, &gpat) != 0)
+			{
+				printf_s(idx, "fixtype: no such folder: %s\r\n", argv[argi]);
+				continue;
+			}
 			CInfoPBRec pb;
 			Str255 name;
 			short gi;
@@ -2277,8 +2292,8 @@ static void cmd_fixtype(int idx, int argc, char* argv[])
 
 				memset(&pb, 0, sizeof(pb));
 				pb.hFileInfo.ioNamePtr = name;
-				pb.hFileInfo.ioVRefNum = s->shell_vRefNum;
-				pb.hFileInfo.ioDirID = s->shell_dirID;
+				pb.hFileInfo.ioVRefNum = gvref;
+				pb.hFileInfo.ioDirID = gdir;
 				pb.hFileInfo.ioFDirIndex = gi;
 
 				if (PBGetCatInfoSync(&pb) != noErr) break;
@@ -2289,7 +2304,7 @@ static void cmd_fixtype(int idx, int argc, char* argv[])
 				name_c[nl] = '\0';
 
 				if (pb.hFileInfo.ioFlAttrib & ioDirMask) continue;
-				if (!glob_match(argv[argi], name_c)) continue;
+				if (!glob_match(gpat, name_c)) continue;
 
 				if (!lookup_ext_type(name_c, &ftype, &fcreator))
 				{
@@ -2297,8 +2312,8 @@ static void cmd_fixtype(int idx, int argc, char* argv[])
 					continue;
 				}
 
-				fspec.vRefNum = s->shell_vRefNum;
-				fspec.parID = s->shell_dirID;
+				fspec.vRefNum = gvref;
+				fspec.parID = gdir;
 				fspec.name[0] = name[0];
 				memcpy(fspec.name + 1, name + 1, name[0]);
 
@@ -10238,10 +10253,16 @@ static void cmd_ftp(int idx, int argc, char** argv)
 				return;
 			}
 
-			copy_cstr_trunc(s->ftp_glob_pattern, sizeof(s->ftp_glob_pattern),
-			                local_arg);
-			s->ftp_glob_vRefNum = s->shell_vRefNum;
-			s->ftp_glob_dirID = s->shell_dirID;
+			{
+				/* the pattern may name a folder: dir/*.txt */
+				const char* gpat;
+				if (glob_resolve_dir(idx, local_arg, &s->ftp_glob_vRefNum, &s->ftp_glob_dirID, &gpat) != 0)
+				{
+					printf_s(idx, "ftp: no such folder: %s\r\n", local_arg);
+					return;
+				}
+				copy_cstr_trunc(s->ftp_glob_pattern, sizeof(s->ftp_glob_pattern), gpat);
+			}
 		}
 		else
 		{

@@ -118,6 +118,8 @@ def main():
     check('paths: basename, dirname', 'basename /a/b/c.txt ; dirname /a/b/c.txt', 'c.txt\n/a/b')
     check('mkdir -p and rmdir', 'mkdir -p a/b/c && cd a/b/c && pwd && cd ~/%s && rmdir a/b/c && rmdir a/b && rmdir a' % T,
           regex=r'/%s/a/b/c$' % T)
+    check('rm with a wildcard in another folder', 'mkdir -p g ; cp fox.txt g/a.tmp ; cp fox.txt g/b.tmp ; '
+          'cp fox.txt g/keep.txt ; rm g/*.tmp ; ls g ; rm g/* ; rmdir g', 'keep.txt')
     check('mkdir: existing folder fails', 'mkdir -p x ; mkdir x', status=1)
     check('mv: rename and move into a folder', 'mkdir -p mvdir ; cp fox.txt m.txt && mv m.txt n.txt && mv n.txt mvdir && '
           'ls mvdir && mv mvdir/n.txt back.txt && ls back.txt && rm back.txt && rmdir mvdir', 'n.txt\nback.txt')
