@@ -23,7 +23,8 @@ What it does
   flags, and aliases; convert between Mac, Unix and DOS line endings.
 * **Modern encryption.** SSH uses elliptic-curve (ECDH P-256, P-384, P-521) or Diffie-Hellman
   key exchange, AES-GCM or AES-CTR encryption with HMAC-SHA-256/512 (encrypt-then-MAC), ECDSA and
-  RSA (SHA-2) keys, and strict key exchange against the Terrapin attack. HTTPS uses TLS 1.2. It is
+  RSA (SHA-2) keys, and strict key exchange against the Terrapin attack (the server uses ECDH
+  P-256, AES-128-CTR and HMAC-SHA-256). HTTPS uses TLS 1.2. It is
   built on current libssh2 and mbedTLS 3.6 LTS, with randomness gathered from the Mac's sound input
   and clock jitter and checked by health tests (see [Randomness](#randomness)).
 * **A clean terminal.** White on black by default, with other colour schemes; 256 colours and true
