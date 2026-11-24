@@ -10,7 +10,7 @@
 #include "ControlDefinitions.r"
 
 resource 'DLOG' (DLOG_ABOUT, purgeable) {
-	{0, 0, 148, 420},
+	{0, 0, 156, 560},
 	dBoxProc,
 	visible,
 	goAway,
@@ -22,17 +22,26 @@ resource 'DLOG' (DLOG_ABOUT, purgeable) {
 
 resource 'DITL' (DITL_ABOUT, purgeable) {
 	{
-		{ 10, 10, 138, 138 },
+		{ 14, 10, 142, 138 },
 		Picture { enabled, PICT_ABOUT };
 
-		{ 34, 160, 54, 410},
-		StaticText { disabled, "MacShell" };
+		{ 14, 156, 32, 550},
+		StaticText { disabled, "MacShell v" APP_VERSION };
 
-		{ 64, 160, 84, 410},
-		StaticText { disabled, APP_LONG_VERSION };
+		{ 34, 156, 52, 550},
+		StaticText { disabled, "Unix style shell for MacOS 7+" };
 
-		{ 94, 160, 114, 410},
-		StaticText { disabled, "SevenTTY by LXXero, ssheven by cy384" };
+		{ 54, 156, 72, 550},
+		StaticText { disabled, "https://www.github.com/jrobertfisher/MacShell" };
+
+		{ 86, 156, 104, 550},
+		StaticText { disabled, "Credits:" };
+
+		{ 104, 166, 122, 550},
+		StaticText { disabled, "SevenTTY by LXXero" };
+
+		{ 122, 166, 140, 550},
+		StaticText { disabled, "ssheven by cy384" };
 	}
 };
 
