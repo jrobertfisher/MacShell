@@ -3177,6 +3177,20 @@ static void cmd_ifconfig(int idx, int argc, char* argv[])
 		OTInetHostToString(info.fDNSAddr, ip_str);
 		printf_s(idx, "  dns:       %s\r\n", ip_str);
 
+		/* newer Open Transport also reports the hardware address and MTU */
+		if (info.fVersion >= 2 && info.fHWAddr != NULL && info.fHWAddrLen >= 1 && info.fHWAddrLen <= 16)
+		{
+			int k;
+			vt_write(idx, "  ether:     ");
+			for (k = 0; k < info.fHWAddrLen; k++)
+				printf_s(idx, "%02x%s", info.fHWAddr[k], k + 1 < info.fHWAddrLen ? ":" : "");
+			vt_write(idx, "\r\n");
+		}
+		if (info.fVersion >= 2 && info.fIfMTU > 0 && info.fIfMTU < 100000)
+			printf_s(idx, "  mtu:       %lu\r\n", (unsigned long)info.fIfMTU);
+		if (info.fDomainName[0])
+			printf_s(idx, "  domain:    %s\r\n", info.fDomainName);
+
 		vt_write(idx, "\r\n");
 	}
 
@@ -3486,6 +3500,265 @@ done:
 	if (s->in_use && s->type == SESSION_LOCAL)
 		shell_prompt(idx);
 	return 0;
+}
+
+/* ---- traceroute: ICMP echo with increasing TTL ---- */
+
+/* set the IP time-to-live on an endpoint (a one-byte option; some versions want four) */
+static OSStatus set_ttl(EndpointRef ep, int ttl)
+{
+	TOptMgmt req, ret;
+	UInt8 buf[kOTFourByteOptionSize];
+	TOption* opt = (TOption*)buf;
+	OSStatus err;
+	int size;
+
+	for (size = kOTOneByteOptionSize; ; size = kOTFourByteOptionSize)
+	{
+		OTMemzero(buf, sizeof buf);
+		opt->len = size;
+		opt->level = INET_IP;
+		opt->name = kIP_TTL;
+		opt->status = 0;
+		if (size == kOTOneByteOptionSize) *(UInt8*)opt->value = (UInt8)ttl;
+		else opt->value[0] = ttl;
+		req.opt.buf = buf; req.opt.len = size; req.flags = T_NEGOTIATE;
+		ret.opt.buf = buf; ret.opt.maxlen = sizeof buf; ret.flags = 0;
+		OTSetSynchronous(ep);
+		OTSetBlocking(ep);
+		err = OTOptionManagement(ep, &req, &ret);
+		OTSetNonBlocking(ep);
+		if (err == noErr && opt->status == T_SUCCESS) return noErr;
+		if (size == kOTFourByteOptionSize) return err != noErr ? err : -1;
+	}
+}
+
+static void* trace_thread(void* arg)
+{
+	int idx = (int)(long)arg;
+	struct session* s = &sessions[idx];
+	EndpointRef ep = kOTInvalidEndpointRef;
+	OSStatus err;
+	InetHost dest = 0;
+	InetAddress bind_addr, to_addr, from_addr;
+	TBind req;
+	char ip[32];
+	unsigned short ident = (unsigned short)((TickCount() ^ 0x5A5A) & 0xFFFF);
+	int ttl, reached = 0, status = 1;
+	InetSvcRef svc = NULL;
+
+	if (OTInetStringToHost(s->ping_host, &dest) != noErr)
+	{
+		InetHostInfo info;
+		svc = OTOpenInternetServices(kDefaultInternetServicesPath, 0, &err);
+		if (err != noErr || svc == NULL) { svc = NULL; printf_s(idx, "traceroute: cannot look up names\r\n"); goto done; }
+		OTSetSynchronous(svc);
+		OTSetBlocking(svc);
+		OTInstallNotifier(svc, shell_ot_timeout_notifier, nil);
+		OTUseSyncIdleEvents(svc, true);
+		ot_timeout_provider = svc;
+		ot_timeout_deadline = TickCount() + OT_TIMEOUT_TICKS;
+		err = OTInetStringToAddress(svc, s->ping_host, &info);
+		ot_timeout_deadline = 0;
+		ot_timeout_provider = nil;
+		if (err != noErr || info.addrs[0] == 0)
+		{
+			printf_s(idx, "traceroute: cannot resolve %s\r\n", s->ping_host);
+			goto done;
+		}
+		dest = info.addrs[0];
+	}
+	OTInetHostToString(dest, ip);
+
+	ep = OTOpenEndpoint(OTCreateConfiguration(kRawIPName), 0, nil, &err);
+	if (err != noErr) { ep = kOTInvalidEndpointRef; printf_s(idx, "traceroute: raw IP not available (err=%d)\r\n", (int)err); goto done; }
+	OTInitInetAddress(&bind_addr, 1, 0);
+	OTMemzero(&req, sizeof req);
+	req.addr.buf = (UInt8*)&bind_addr;
+	req.addr.len = sizeof bind_addr;
+	if (OTBind(ep, &req, nil) != noErr) { printf_s(idx, "traceroute: cannot bind raw IP\r\n"); goto done; }
+	OTSetNonBlocking(ep);
+
+	printf_s(idx, "traceroute to %s (%s), %d hops max\r\n", s->ping_host, ip, s->trace_maxhops);
+
+	for (ttl = 1; ttl <= s->trace_maxhops && !reached; ttl++)
+	{
+		InetHost hop = 0;
+		int probe;
+		if (s->thread_command == EXIT || !s->in_use) { status = 130; break; }
+		if (set_ttl(ep, ttl) != noErr)
+		{
+			printf_s(idx, "traceroute: this Open Transport can't set the TTL\r\n");
+			break;
+		}
+		printf_s(idx, "%2d ", ttl);
+		for (probe = 0; probe < 3; probe++)
+		{
+			unsigned char pkt[40];
+			TUnitData ud;
+			unsigned long t_sent, start;
+			int got = 0, i, seq = ttl * 4 + probe;
+			unsigned short ck;
+
+			memset(pkt, 0, sizeof pkt);
+			pkt[0] = 8;
+			pkt[4] = (unsigned char)(ident >> 8); pkt[5] = (unsigned char)ident;
+			pkt[6] = (unsigned char)(seq >> 8);   pkt[7] = (unsigned char)seq;
+			for (i = 8; i < 40; i++) pkt[i] = (unsigned char)i;
+			ck = icmp_checksum(pkt, 40);
+			pkt[2] = (unsigned char)(ck >> 8); pkt[3] = (unsigned char)ck;
+			OTInitInetAddress(&to_addr, 1, dest);
+			OTMemzero(&ud, sizeof ud);
+			ud.addr.buf = (UInt8*)&to_addr;
+			ud.addr.len = sizeof to_addr;
+			ud.udata.buf = pkt;
+			ud.udata.len = sizeof pkt;
+			t_sent = us_now();
+			start = TickCount();
+			if (OTSndUData(ep, &ud) != noErr) { vt_write(idx, " !"); continue; }
+
+			while (!got && TickCount() - start < 2 * 60)
+			{
+				unsigned char buf[1600];
+				OTFlags flags = 0;
+				OTResult r;
+				unsigned char* p = buf;
+				long n;
+				InetHost from;
+				if (s->thread_command == EXIT || !s->in_use) break;
+				OTMemzero(&ud, sizeof ud);
+				ud.addr.buf = (UInt8*)&from_addr;
+				ud.addr.maxlen = sizeof from_addr;
+				ud.udata.buf = buf;
+				ud.udata.maxlen = sizeof buf;
+				r = OTRcvUData(ep, &ud, &flags);
+				if (r == kOTNoDataErr) { YieldToAnyThread(); continue; }
+				if (r == kOTLookErr) { if (OTLook(ep) == T_UDERR) OTRcvUDErr(ep, NULL); continue; }
+				if (r != noErr) { YieldToAnyThread(); continue; }
+				n = ud.udata.len;
+				from = from_addr.fHost;
+				if (n >= 20 && (p[0] >> 4) == 4)
+				{
+					int ihl = (p[0] & 0x0F) * 4;
+					from = ((InetHost)p[12] << 24) | ((InetHost)p[13] << 16) | ((InetHost)p[14] << 8) | p[15];
+					p += ihl; n -= ihl;
+				}
+				if (n < 8) continue;
+				if (p[0] == 0 && ((p[4] << 8) | p[5]) == ident && ((p[6] << 8) | p[7]) == seq)
+					got = 1, reached = 1;
+				else if ((p[0] == 11 || p[0] == 3) && n >= 36 && p[8 + 9] == 1 &&
+				         ((p[28 + 4] << 8) | p[28 + 5]) == ident && ((p[28 + 6] << 8) | p[28 + 7]) == seq)
+				{
+					got = 1;
+					if (p[0] == 3) reached = 1;
+				}
+				if (got)
+				{
+					unsigned long rtt = us_now() - t_sent;
+					if (hop != from)
+					{
+						char hip[32];
+						hop = from;
+						OTInetHostToString(hop, hip);
+						printf_s(idx, " %s", hip);
+					}
+					vt_write(idx, "  ");
+					print_ms(idx, rtt);
+					vt_write(idx, " ms");
+					if (p[0] == 3) vt_write(idx, p[1] == 1 ? " !H" : p[1] == 3 ? "" : " !N");
+				}
+			}
+			if (s->thread_command == EXIT || !s->in_use) break;
+			if (!got) vt_write(idx, " *");
+		}
+		vt_write(idx, "\r\n");
+		/* the router's name, unless -n */
+		if (hop != 0 && !s->trace_numeric && s->in_use && s->thread_command != EXIT)
+		{
+			InetDomainName name;
+			if (svc == NULL)
+			{
+				svc = OTOpenInternetServices(kDefaultInternetServicesPath, 0, &err);
+				if (err != noErr) svc = NULL;
+				else
+				{
+					OTSetSynchronous(svc);
+					OTSetBlocking(svc);
+					OTInstallNotifier(svc, shell_ot_timeout_notifier, nil);
+					OTUseSyncIdleEvents(svc, true);
+				}
+			}
+			if (svc)
+			{
+				ot_timeout_provider = svc;
+				ot_timeout_deadline = TickCount() + 2 * 60;
+				err = OTInetAddressToName(svc, hop, name);
+				ot_timeout_deadline = 0;
+				ot_timeout_provider = nil;
+				if (err == noErr)
+				{
+					int l = strlen(name);
+					if (l > 0 && name[l - 1] == '.') name[l - 1] = 0;
+					printf_s(idx, "    (%s)\r\n", name);
+				}
+			}
+		}
+	}
+	if (reached) status = 0;
+
+done:
+	if (ep != kOTInvalidEndpointRef) { OTUnbind(ep); OTCloseProvider(ep); }
+	if (svc) OTCloseProvider(svc);
+	s->last_status = status;
+	s->worker_mode = WORKER_NONE;
+	s->thread_state = DONE;
+	s->thread_command = WAIT;
+	if (s->in_use && s->type == SESSION_LOCAL)
+		shell_prompt(idx);
+	return 0;
+}
+
+/* traceroute [-n] [-m hops] host */
+static void cmd_traceroute(int idx, int argc, char* argv[])
+{
+	struct session* s = &sessions[idx];
+	const char* host = NULL;
+	int i, maxhops = 30, numeric = 0;
+	ThreadID tid = kNoThreadID;
+	OSErr err;
+
+	for (i = 1; i < argc; i++)
+	{
+		if (strcmp(argv[i], "-n") == 0) numeric = 1;
+		else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) maxhops = atoi(argv[++i]);
+		else if (argv[i][0] != '-' && !host) host = argv[i];
+		else { host = NULL; break; }
+	}
+	if (!host || maxhops < 1 || maxhops > 64)
+	{
+		vt_write(idx, "usage: traceroute [-n] [-m hops] <host>\r\n");
+		return;
+	}
+	if (InitOpenTransport() != noErr) { vt_write(idx, "traceroute: Open Transport not available\r\n"); return; }
+	copy_cstr_trunc(s->ping_host, sizeof s->ping_host, host);
+	s->trace_maxhops = maxhops;
+	s->trace_numeric = numeric;
+	if (s->thread_state == DONE && s->thread_id != kNoThreadID)
+		session_reap_thread(idx, 0);
+	s->thread_command = READ;
+	s->thread_state = OPEN;
+	err = NewThread(kCooperativeThread, trace_thread, (void*)(long)idx, THREAD_STACK_WORKER,
+	                kCreateIfNeeded, NULL, &tid);
+	if (err != noErr)
+	{
+		s->thread_command = WAIT;
+		s->thread_state = DONE;
+		s->thread_id = kNoThreadID;
+		printf_s(idx, "traceroute: cannot start (err=%d)\r\n", (int)err);
+		return;
+	}
+	s->thread_id = tid;
+	s->worker_mode = WORKER_PING;
 }
 
 /* ping [-c count] host    ICMP echo, until Ctrl+C or count replies
@@ -11743,8 +12016,8 @@ static void cmd_help(int idx, int argc, char* argv[])
 		"Bytes      hexdump xxd cmp md5sum sha1sum sha256sum sha512sum crc32",
 		"Mac files  getinfo chown settype setcreator fixtype chmod chattr label",
 		"System     date cal uptime uname hostname df free ps history clear colors",
-		"Network    ssh ssh-keygen sshd scp ftp wget curl telnet nc ping host dig",
-		"           nslookup ifconfig entropy",
+		"Network    ssh ssh-keygen sshd scp ftp wget curl telnet nc ping traceroute",
+		"           host dig nslookup ifconfig entropy",
 		"Shell      help man exit",
 		"",
 		"Other names: dir (ls), more less type (cat), copy (cp), ren rename (mv),",
@@ -11823,7 +12096,7 @@ static const char* shell_commands[] = {
 	"nl", "nslookup", "open", "ping", "ps", "pwd", "quit", "rd", "readlink",
 	"realpath", "ren", "rename", "rev", "rm", "rmdir", "rot13", "scp", "seq",
 	"setcreator", "settype", "sha1sum", "sha256sum", "sha512sum", "sleep",
-	"ssh", "ssh-keygen", "sshd", "strings", "tail", "telnet", "touch", "type", "uname",
+	"ssh", "ssh-keygen", "sshd", "strings", "tail", "telnet", "touch", "traceroute", "type", "uname",
 	"unix2dos", "unix2mac", "uptime", "wc", "wget", "which", "xxd"
 };
 #define NUM_SHELL_COMMANDS (sizeof(shell_commands) / sizeof(shell_commands[0]))
@@ -12573,6 +12846,7 @@ static void shell_execute_one(int idx, char* line)
 	else if (strcmp(cmd, "nc") == 0)        cmd_nc(idx, argc, argv);
 	else if (strcmp(cmd, "host") == 0)      cmd_host(idx, argc, argv);
 	else if (strcmp(cmd, "dig") == 0)       cmd_dig(idx, argc, argv);
+	else if (strcmp(cmd, "traceroute") == 0) cmd_traceroute(idx, argc, argv);
 	else if (strcmp(cmd, "nslookup") == 0)  cmd_nslookup(idx, argc, argv);
 	else if (strcmp(cmd, "ifconfig") == 0)  cmd_ifconfig(idx, argc, argv);
 	else if (strcmp(cmd, "ping") == 0)      cmd_ping(idx, argc, argv);

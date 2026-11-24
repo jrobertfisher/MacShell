@@ -6,8 +6,9 @@ SYNOPSIS
 
 DESCRIPTION
     Shows each network interface's IP address, netmask, broadcast
-    address, gateway (router) and DNS server, from Open Transport (the
-    TCP/IP control panel).
+    address, gateway (router) and DNS server, and, where Open Transport
+    reports them, the hardware (Ethernet) address, the MTU and the
+    domain name, from the TCP/IP control panel's settings.
 
 SEE ALSO
     host, hostname

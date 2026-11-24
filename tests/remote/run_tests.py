@@ -113,14 +113,14 @@ def main():
     check('chain: quoted ; is not a separator', 'echo "a;b"', 'a;b')
     check('paths: home', 'cd ; pwd', regex=r'^/[^/]+/Documents$')
     check('paths: cd / lists disks', 'cd / ; pwd ; ls', regex=r'^/\n[^\n]+/$')
-    check('paths: .. and -', 'cd /; cd ~ ; cd .. ; pwd ; cd - ; pwd', regex=r'^/[^/\n]+\n/[^/\n]+/Documents$')
+    check('paths: .. and -', 'cd /; cd ~ ; cd .. ; pwd ; cd - ; pwd', regex=r'^/[^/\n]+\n~\n/[^/\n]+/Documents$')
     check('paths: realpath', 'realpath fox.txt', regex=r'^/[^/]+/Documents/%s/fox\.txt$' % T)
     check('paths: basename, dirname', 'basename /a/b/c.txt ; dirname /a/b/c.txt', 'c.txt\n/a/b')
     check('mkdir -p and rmdir', 'mkdir -p a/b/c && cd a/b/c && pwd && cd ~/%s && rmdir a/b/c && rmdir a/b && rmdir a' % T,
           regex=r'/%s/a/b/c$' % T)
     check('mkdir: existing folder fails', 'mkdir -p x ; mkdir x', status=1)
-    check('mv: rename and move into a folder', 'cp fox.txt m.txt && mv m.txt n.txt && mv n.txt x && ls x && rm x/n.txt && rmdir x',
-          'n.txt')
+    check('mv: rename and move into a folder', 'mkdir -p mvdir ; cp fox.txt m.txt && mv m.txt n.txt && mv n.txt mvdir && '
+          'ls mvdir && mv mvdir/n.txt back.txt && ls back.txt && rm back.txt && rmdir mvdir', 'n.txt\nback.txt')
 
     # ---- text tools ----
     check('cat: Unix lines', 'cat text.txt', text)
@@ -179,10 +179,17 @@ def main():
           regex=r'/%s/fox\.txt\nHello, World' % T)
     check('fixtype', 'cp fox.txt q.txt && setcreator ???? q.txt && fixtype q.txt && ls -l q.txt ; rm q.txt',
           contains=['ttxt'])
-    check('dos2unix / unix2mac / mac2unix / unix2dos',
-          'cp crlf.txt c.txt && dos2unix c.txt && xxd c.txt && unix2mac c.txt && xxd c.txt && mac2unix c.txt && '
-          'unix2dos c.txt && xxd c.txt ; rm c.txt',
-          contains=['6f6e 650a', '6f6e 650d 6c69', '6f6e 650d 0a'])
+    out, code = ('', 0) if (only and 'dos2unix' not in only) else mac('cp crlf.txt c.txt && dos2unix c.txt && xxd c.txt && unix2mac c.txt && xxd c.txt && '
+                    'mac2unix c.txt && unix2dos c.txt && xxd c.txt ; rm c.txt')
+    hexes = [''.join(l.split(':', 1)[1][:40].split()) for l in out.splitlines() if ':' in l]
+    dumps = [hexes[i] + hexes[i + 1] for i in range(0, len(hexes) - 1, 2)]
+    ok = dumps == ['6c696e65206f6e650a6c696e652074776f0a', '6c696e65206f6e650d6c696e652074776f0d',
+                   '6c696e65206f6e650d0a6c696e652074776f0d0a']
+    if not only or 'dos2unix' in only:
+        results.append(('dos2unix, unix2mac, mac2unix+unix2dos', ok))
+        print(('ok    ' if ok else 'FAIL  ') + 'dos2unix, unix2mac, mac2unix+unix2dos')
+        if not ok:
+            print('      dumps:', dumps)
 
     # ---- system ----
     check('uname', 'uname', regex=r'^Mac OS \d+\.\d+')
@@ -194,8 +201,9 @@ def main():
     check('ps', 'ps', contains=['MacShell'])
     check('hostname', 'hostname', regex=r'\S')
     check('ifconfig', 'ifconfig', regex=r'address:\s+\d+\.\d+\.\d+\.\d+')
+    check('ifconfig shows the hardware address', 'ifconfig', regex=r'ether:\s+([0-9a-f]{2}:){5}[0-9a-f]{2}')
     check('entropy ready', 'entropy', contains=['ready'])
-    check('help lists dig and sshd', 'help', contains=['dig', 'sshd'])
+    check('help lists dig, traceroute and sshd', 'help', contains=['dig', 'traceroute', 'sshd'])
     check('man ls', 'man ls', contains=['NAME', 'ls, dir - list'])
     check('man -k', 'man -k checksum', contains=['md5sum'])
     check('--help', 'ftp --help', contains=['SYNOPSIS'])
@@ -206,13 +214,16 @@ def main():
     check('ping (ICMP)', 'ping -c 2 %s' % FTP, contains=['2 packets transmitted, 2 received'])
     check('ping host port (TCP)', 'ping %s 21' % FTP, contains=['connected'])
     check('host', 'host example.com', regex=r'has address \d+\.\d+\.\d+\.\d+')
+    check('traceroute reaches the host', 'traceroute -n -m 5 %s' % FTP, contains=[' %s ' % FTP, ' ms'])
+    check('traceroute: bad usage is status 1', 'traceroute', status=1)
     want = sorted(subprocess.run(['dig', '+short', 'example.com', 'A'], capture_output=True, text=True).stdout.split())
-    out, code = mac('dig example.com +short')
-    ok = code == 0 and sorted(out.split()) == want
-    results.append(('dig +short matches this computer\'s dig', ok))
-    print(('ok    ' if ok else 'FAIL  ') + 'dig +short matches this computer\'s dig')
-    if not ok:
-        print('      mac:', out.split(), 'here:', want)
+    if not only or only in 'dig +short':
+        out, code = mac('dig example.com +short')
+        ok = code == 0 and sorted(out.split()) == want
+        results.append(('dig +short matches this computer\'s dig', ok))
+        print(('ok    ' if ok else 'FAIL  ') + 'dig +short matches this computer\'s dig')
+        if not ok:
+            print('      mac:', out.split(), 'here:', want)
     check('dig MX', 'dig gmail.com MX', contains=['ANSWER SECTION', 'IN      MX', 'status: NOERROR'])
     check('dig: NXDOMAIN is status 1', 'dig no-such-name-macshell.example', status=1, contains=['NXDOMAIN'])
     check('dig -x', 'dig -x 1.1.1.1 +short', contains=['one.one.one.one.'])
@@ -228,9 +239,12 @@ def main():
     stamp = 'mstest-%d' % int(time.time())
     check('ftp put (plain file)', 'ftp put -n bin.dat "anonymous@%s:/From Mac/%s.dat"' % (FTP, stamp))
     p = os.path.join(FROM_MAC, stamp + '.dat')
-    ok = os.path.exists(p) and open(p, 'rb').read() == binf
-    results.append(('ftp put arrives intact', ok))
-    print(('ok    ' if ok else 'FAIL  ') + 'ftp put arrives intact')
+    if not only or only in 'ftp put arrives intact':
+        ok = os.path.exists(p) and open(p, 'rb').read() == binf
+        results.append(('ftp put arrives intact', ok))
+        print(('ok    ' if ok else 'FAIL  ') + 'ftp put arrives intact')
+    if os.path.exists(p):
+        os.remove(p)
 
     if SCP:
         check('scp download', 'scp -n %s:/etc/hostname h.txt && cat h.txt ; rm h.txt' % SCP, regex=r'\S')

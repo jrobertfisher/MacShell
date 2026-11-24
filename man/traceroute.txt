@@ -1,0 +1,29 @@
+NAME
+    traceroute - show the routers on the way to a host
+
+SYNOPSIS
+    traceroute [-n] [-m hops] <host>
+
+DESCRIPTION
+    Sends ICMP echo requests with an increasing time-to-live (TTL): each
+    router that drops one for running out of TTL answers "time
+    exceeded", which reveals the path to host one hop at a time. Each
+    line shows the hop number, the router's address, three round-trip
+    times in milliseconds (* for no answer within 2 seconds) and, unless
+    -n, the router's name. It stops at the host, or after 30 hops.
+    !H or !N after a time means the host or network is unreachable.
+    Ctrl+C stops it.
+
+    In an emulator using QEMU's user networking, the route is hidden and
+    the host appears to be one hop away.
+
+OPTIONS
+    -n        don't look up the routers' names (faster)
+    -m hops   try at most this many hops (1 to 64)
+
+EXAMPLES
+    traceroute example.com
+    traceroute -n -m 10 1.1.1.1
+
+SEE ALSO
+    ping, dig, ifconfig

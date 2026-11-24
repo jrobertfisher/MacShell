@@ -166,6 +166,8 @@ struct session
 	char keygen_comment[64];
 	short keygen_vref;           /* folder the key files go in */
 	char ping_host[256];         /* ping: host and number of pings (0 = until Ctrl+C) */
+	int trace_maxhops;           /* traceroute: hops to try, and -n (no names) */
+	int trace_numeric;
 	FSSpec tail_spec;            /* tail -f: the file and how much has been shown */
 	long tail_pos;
 	long ping_count;
