@@ -5,3 +5,4 @@ build/
 .vscode/
 build-m68k/
 build-ppc/
+build-installer/
