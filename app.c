@@ -312,7 +312,7 @@ have_file:
 /* The connection settings are Pascal strings (length byte first) that the
    SSH code also reads as C strings from p + 1. GetDialogItemText only sets
    the length, so a shorter entry would leave the end of an older one behind
-   (typing "rob" over "jsmith" gave "bobith"). Always terminate them. */
+   (typing "bob" over "jsmith" gave "bobith"). Always terminate them. */
 static void pstr_terminate(unsigned char* p, int bufsize)
 {
 	int len = p[0];
