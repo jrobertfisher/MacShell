@@ -1447,6 +1447,24 @@ static void* sshd_thread(void* arg)
 		say("sshd: cannot open a listening endpoint (err=%d)\r\n", (int)err);
 		goto out;
 	}
+	/* reuse the port at once after a crash or quick restart (otherwise
+	   Open Transport keeps it reserved for a minute or so) */
+	{
+		TOptMgmt oreq, oret;
+		UInt8 obuf[kOTFourByteOptionSize];
+		TOption* opt = (TOption*)obuf;
+		opt->len = kOTFourByteOptionSize;
+		opt->level = INET_IP;
+		opt->name = kIP_REUSEADDR;
+		opt->status = 0;
+		opt->value[0] = 1;
+		oreq.opt.buf = obuf; oreq.opt.len = sizeof obuf; oreq.flags = T_NEGOTIATE;
+		oret.opt.buf = obuf; oret.opt.maxlen = sizeof obuf; oret.flags = 0;
+		OTSetSynchronous(listener);
+		OTSetBlocking(listener);
+		OTOptionManagement(listener, &oreq, &oret);
+	}
+
 	OTInitInetAddress(&addr, g_port, 0);
 	OTMemzero(&req, sizeof req);
 	req.addr.buf = (UInt8*)&addr;
