@@ -34,14 +34,8 @@ resource 'DITL' (DITL_ABOUT, purgeable) {
 		{ 54, 156, 72, 550},
 		StaticText { disabled, "https://www.github.com/jrobertfisher/MacShell" };
 
-		{ 86, 156, 104, 550},
-		StaticText { disabled, "Credits:" };
-
-		{ 104, 166, 122, 550},
-		StaticText { disabled, "SevenTTY by LXXero" };
-
-		{ 122, 166, 140, 550},
-		StaticText { disabled, "ssheven by cy384" };
+		{ 92, 156, 110, 550},
+		StaticText { disabled, "Licenses: type \"man license\" in MacShell" };
 	}
 };
 

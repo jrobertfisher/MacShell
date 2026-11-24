@@ -219,7 +219,9 @@ To change the icon, edit and run `tools/make_icons.py icons.r docs/icon-preview.
 
 License and credits
 -------------------
-BSD 2-Clause; see `LICENSE`.
+BSD 2-Clause; see `LICENSE`. MacShell also includes libssh2 (BSD 3-Clause), Mbed TLS (Apache 2.0),
+libvterm (MIT) and parts of the newlib C library; all their licences and notices are in
+`docs/LICENSES.txt`, and in MacShell itself with `man license`.
 
 MacShell grew out of [SevenTTY](https://github.com/LXXero/SevenTTY) by LXXero, which is based on
 [ssheven](https://github.com/cy384/ssheven) by cy384.
