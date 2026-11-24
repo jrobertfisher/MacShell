@@ -54,8 +54,8 @@ Requirements
 
 MacShell is developed and tested in emulated Mac OS 9 (QEMU), where the test suite passes. It is
 meant for a Macintosh LC with a 68030 accelerator running System 7.5.3, but hasn't been tested on
-that hardware yet. The source also has a PowerPC build, but it hasn't been built or
-tested since the changes above.
+that hardware yet. The source also has a PowerPC build, which hasn't been built or
+tested yet.
 
 Randomness
 ----------
