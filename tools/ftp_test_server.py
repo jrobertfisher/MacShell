@@ -7,13 +7,19 @@ Connect from Mac: ftp get anonymous@10.0.2.2:<port>:/test.txt
 import socket, sys, time, threading
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 2121
+# Loopback by default: this server answers RETR from anyone who connects and
+# opens a further listener per PASV. Under QEMU user-mode networking the guest
+# reaches the host at 10.0.2.2, so a loopback bind still works from an
+# emulated Mac. For real hardware on the LAN, pass an address explicitly:
+# ftp_test_server.py 2121 192.168.1.5
+HOST = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
 
 # fake file content served for any RETR
 FILE_DATA = b"Hello from the FTP test server!\r\nThis is test file data.\r\n"
 
 srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-srv.bind(("0.0.0.0", PORT))
+srv.bind((HOST, PORT))
 srv.listen(1)
 print(f"FTP test server on port {PORT}")
 print(f"From Mac QEMU, connect to: ftp get anonymous@10.0.2.2:{PORT}:/test.txt")
@@ -84,7 +90,7 @@ while True:
                         pasv_sock.close()
                     pasv_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     pasv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    pasv_sock.bind(("0.0.0.0", 0))
+                    pasv_sock.bind((HOST, 0))
                     pasv_sock.listen(1)
                     pasv_sock.settimeout(30)
                     dp = pasv_sock.getsockname()[1]

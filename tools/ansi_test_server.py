@@ -7,6 +7,12 @@ Serves .ans files from tools/testart/, converting CP437 to UTF-8
 import socket, sys, time, os, glob, select
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 1337
+# Loopback by default: this is an unauthenticated server that reads files from
+# tools/testart/ and sends them to anyone who connects. Under QEMU user-mode
+# networking the guest reaches the host at 10.0.2.2, so a loopback bind is
+# still reachable from an emulated Mac. To reach it from real hardware on the
+# LAN, pass an address explicitly: ansi_test_server.py 1337 192.168.1.5
+HOST = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
 
 # CP437 -> Unicode mapping for bytes 0x00-0xFF
 # 0x00-0x1F: CP437 control chars have special glyphs (not ASCII control)
@@ -148,7 +154,7 @@ def send_art(conn, idx):
 
 srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-srv.bind(("0.0.0.0", PORT))
+srv.bind((HOST, PORT))
 srv.listen(1)
 print(f"Listening on port {PORT}")
 

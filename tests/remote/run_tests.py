@@ -15,7 +15,9 @@ Settings (environment variables):
   MACSHELL_SCP    user@host for scp tests, using the Mac's ~/.ssh key
                   (default: none, skipped)
 
-Usage: run_tests.py [-k word]   (-k runs only tests whose name contains word)
+Usage: run_tests.py [-k word] [--quick]
+  -k word   run only tests whose name contains word (give -k more than once for several)
+  --quick   one or two tests per area (for slow Macs: each test is a new SSH login)
 """
 import hashlib, os, random, re, shlex, subprocess, sys, time, zlib
 
@@ -29,7 +31,20 @@ T = 'mstest'                     # test folder on the Mac, in ~
 ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
 
 results = []
-only = sys.argv[sys.argv.index('-k') + 1] if '-k' in sys.argv else None
+only = [sys.argv[i + 1] for i, a in enumerate(sys.argv[:-1]) if a == '-k']
+quick = '--quick' in sys.argv
+# --quick: one or two tests per area, for slow Macs (each test is a new SSH login)
+QUICK = {
+    'setup: files downloaded', 'status: error is 1', 'chain: && skips after failure',
+    'mkdir -p and rmdir', 'cat: Unix lines', 'grep -c', 'sha256sum bin.dat', 'xxd -r round trip',
+    'settype, setcreator, getinfo', 'entropy ready', 'ping (ICMP)',
+    "dig +short matches this computer's dig", 'curl -I', 'wget https', 'ftp put (plain file)',
+    'ftp put arrives intact', 'sshd status',
+}
+
+
+def wanted(name):
+    return (not only or any(w in name for w in only)) and (not quick or name in QUICK)
 
 
 def mac(cmd, timeout=180, stdin=None):
@@ -46,7 +61,7 @@ def mac(cmd, timeout=180, stdin=None):
 def check(name, cmd, expect=None, status=0, contains=None, regex=None, absent=None, timeout=180):
     """expect: exact output (trailing whitespace ignored); contains: list of
     substrings; regex: pattern that must match; absent: text that must not appear."""
-    if only and only not in name:
+    if not wanted(name):
         return
     out, code = mac(cmd, timeout)
     problems = []
@@ -63,7 +78,7 @@ def check(name, cmd, expect=None, status=0, contains=None, regex=None, absent=No
         problems.append('unexpected %r' % absent)
     ok = not problems
     results.append((name, ok))
-    print(('ok    ' if ok else 'FAIL  ') + name)
+    print(('ok    ' if ok else 'FAIL  ') + name, flush=True)
     if not ok:
         print('      command: ' + cmd)
         for p in problems:
@@ -181,13 +196,13 @@ def main():
           regex=r'/%s/fox\.txt\nHello, World' % T)
     check('fixtype', 'cp fox.txt q.txt && setcreator ???? q.txt && fixtype q.txt && ls -l q.txt ; rm q.txt',
           contains=['ttxt'])
-    out, code = ('', 0) if (only and 'dos2unix' not in only) else mac('cp crlf.txt c.txt && dos2unix c.txt && xxd c.txt && unix2mac c.txt && xxd c.txt && '
+    out, code = ('', 0) if not wanted('dos2unix, unix2mac, mac2unix+unix2dos') else mac('cp crlf.txt c.txt && dos2unix c.txt && xxd c.txt && unix2mac c.txt && xxd c.txt && '
                     'mac2unix c.txt && unix2dos c.txt && xxd c.txt ; rm c.txt')
     hexes = [''.join(l.split(':', 1)[1][:40].split()) for l in out.splitlines() if ':' in l]
     dumps = [hexes[i] + hexes[i + 1] for i in range(0, len(hexes) - 1, 2)]
     ok = dumps == ['6c696e65206f6e650a6c696e652074776f0a', '6c696e65206f6e650d6c696e652074776f0d',
                    '6c696e65206f6e650d0a6c696e652074776f0d0a']
-    if not only or 'dos2unix' in only:
+    if wanted('dos2unix, unix2mac, mac2unix+unix2dos'):
         results.append(('dos2unix, unix2mac, mac2unix+unix2dos', ok))
         print(('ok    ' if ok else 'FAIL  ') + 'dos2unix, unix2mac, mac2unix+unix2dos')
         if not ok:
@@ -195,6 +210,7 @@ def main():
 
     # ---- system ----
     check('uname', 'uname', regex=r'^Mac OS \d+\.\d+')
+    check('uname -a shows which code runs', 'uname -a', regex=r'MacShell [\d.]+ \((PowerPC|68k) code\)')
     check('date', 'date', regex=r'^\w{3} \w{3} +\d+ \d\d:\d\d:\d\d \d{4}$')
     check('uptime', 'uptime', regex=r'^up ')
     check('cal 2 2024', 'cal 2 2024', contains=['February 2024', ' 1  2  3', '25 26 27 28 29'])
@@ -205,6 +221,20 @@ def main():
     check('ifconfig', 'ifconfig', regex=r'address:\s+\d+\.\d+\.\d+\.\d+')
     check('ifconfig shows the hardware address', 'ifconfig', regex=r'ether:\s+([0-9a-f]{2}:){5}[0-9a-f]{2}')
     check('entropy ready', 'entropy', contains=['ready'])
+    # applications: found by name and by creator (Desktop Database), from any folder
+    check('which finds SimpleText by name', 'which SimpleText', regex=r'^/.*/SimpleText$')
+    check('which -c ttxt (Desktop Database)', 'which -c ttxt', regex=r'^/.*/SimpleText$')
+    check('which -c MACS finds the running Finder', 'which -c MACS', contains=['Finder'])
+    check('which: unknown application', 'which NoSuchApp', status=1, contains=['no application called'])
+    check('apps lists SimpleText', 'apps Simple', contains=['ttxt', 'SimpleText'])
+    check('open: no application for a creator',
+          'echo x > nocreator.dat ; settype BINA nocreator.dat ; setcreator zzzz nocreator.dat ; '
+          'open nocreator.dat ; rm nocreator.dat', status=0,
+          contains=["no application found for creator 'zzzz' (type 'BINA')"])
+    check('a command line that is too long is refused', 'echo ' + 'a' * 300, status=1,
+          contains=['too long'])
+    check('man over ssh prints the whole page (no --more--)', 'man license',
+          contains=['Apache License'], absent='--more--')
     check('help lists dig, traceroute and sshd', 'help', contains=['dig', 'traceroute', 'sshd'])
     check('man ls', 'man ls', contains=['NAME', 'ls, dir - list'])
     check('man -k', 'man -k checksum', contains=['md5sum'])
@@ -219,7 +249,7 @@ def main():
     check('traceroute reaches the host', 'traceroute -n -m 5 %s' % FTP, contains=[' %s ' % FTP, ' ms'])
     check('traceroute: bad usage is status 1', 'traceroute', status=1)
     want = sorted(subprocess.run(['dig', '+short', 'example.com', 'A'], capture_output=True, text=True).stdout.split())
-    if not only or only in 'dig +short':
+    if wanted("dig +short matches this computer's dig"):
         out, code = mac('dig example.com +short')
         ok = code == 0 and sorted(out.split()) == want
         results.append(('dig +short matches this computer\'s dig', ok))
@@ -241,7 +271,7 @@ def main():
     stamp = 'mstest-%d' % int(time.time())
     check('ftp put (plain file)', 'ftp put -n bin.dat "anonymous@%s:/From Mac/%s.dat"' % (FTP, stamp))
     p = os.path.join(FROM_MAC, stamp + '.dat')
-    if not only or only in 'ftp put arrives intact':
+    if wanted('ftp put arrives intact'):
         ok = os.path.exists(p) and open(p, 'rb').read() == binf
         results.append(('ftp put arrives intact', ok))
         print(('ok    ' if ok else 'FAIL  ') + 'ftp put arrives intact')
