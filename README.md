@@ -3,7 +3,7 @@ MacShell
 A Unix-style shell for classic Mac OS 7, 8 and 9 on 68k Macs, with an SSH client and server,
 file transfer, network tools and the everyday command-line tools you know from Linux and macOS.
 
-![MacShell icons](docs/icon-preview.png)
+![MacShell running ifconfig and nslookup in Mac OS 9](docs/screenshot.png)
 
 What it does
 ------------
