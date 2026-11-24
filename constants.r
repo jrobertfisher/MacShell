@@ -4,11 +4,11 @@
 #define __CONSTANTS_R__
 
 /* so many versions */
-#define APP_VERSION             "1.0"
-#define APP_LONG_VERSION        "1.0, based on SevenTTY and ssheven"
-#define APP_DESCRIPTION         "MacShell 1.0 - SSH client and shell for classic Mac OS"
+#define APP_VERSION             "1.0.1"
+#define APP_LONG_VERSION        "1.0.1"
+#define APP_DESCRIPTION         "MacShell 1.0.1 - Unix-style shell for classic Mac OS"
 #define APP_VERSION_MAJOR       0x01
-#define APP_VERSION_MINOR       0x00
+#define APP_VERSION_MINOR       0x01
 #define APP_VERSION_PRERELEASE  0x00
 
 /* options: development, alpha, beta, release */
