@@ -6746,7 +6746,7 @@ static int macbinary_unpack(int idx, FSSpec* spec)
 	Str255 pn;
 	FSSpec out;
 	short src = 0, dst = 0;
-	long count = 128, eof = 0, dlen, rlen, sec, data_off, rsrc_off;
+	long count = 128, eof = 0, dlen, rlen, sec, data_off, rsrc_off, bufsize;
 	int nlen, i, header_ok = 0;
 	char* buf = NULL;
 	OSErr err;
@@ -6794,7 +6794,11 @@ static int macbinary_unpack(int idx, FSSpec* spec)
 	if (HCreate(spec->vRefNum, spec->parID, pn, be32(hdr + 69), be32(hdr + 65)) != noErr) goto fail;
 	FSMakeFSSpec(spec->vRefNum, spec->parID, pn, &out);
 
-	buf = NewPtr(8192);
+	/* this takes a while for a big application on a slow Mac: say so */
+	printf_s(idx, "MacBinary: unpacking %s (%ld KB)... ", name, (dlen + rlen + 1023) / 1024);
+	bufsize = 32768;
+	buf = NewPtr(bufsize);
+	if (buf == NULL) { bufsize = 8192; buf = NewPtr(bufsize); }
 	if (buf == NULL) goto fail_out;
 
 	/* data fork */
@@ -6802,7 +6806,9 @@ static int macbinary_unpack(int idx, FSSpec* spec)
 	{
 		if (FSpOpenDF(&out, fsRdWrPerm, &dst) != noErr) goto fail_out;
 		SetFPos(src, fsFromStart, data_off);
-		err = macbin_copy(src, dst, dlen, buf, 8192);
+		SetEOF(dst, dlen);                  /* allocate it in one go */
+		SetFPos(dst, fsFromStart, 0);
+		err = macbin_copy(src, dst, dlen, buf, bufsize);
 		FSClose(dst);
 		dst = 0;
 		if (err != noErr) goto fail_out;
@@ -6812,7 +6818,9 @@ static int macbinary_unpack(int idx, FSSpec* spec)
 	{
 		if (FSpOpenRF(&out, fsRdWrPerm, &dst) != noErr) goto fail_out;
 		SetFPos(src, fsFromStart, rsrc_off);
-		err = macbin_copy(src, dst, rlen, buf, 8192);
+		SetEOF(dst, rlen);                  /* allocate it in one go */
+		SetFPos(dst, fsFromStart, 0);
+		err = macbin_copy(src, dst, rlen, buf, bufsize);
 		FSClose(dst);
 		dst = 0;
 		if (err != noErr) goto fail_out;
@@ -6853,11 +6861,12 @@ static int macbinary_unpack(int idx, FSSpec* spec)
 		FSpSetFInfo(spec, &fi);
 	}
 	DisposePtr(buf);
-	printf_s(idx, "MacBinary: unpacked to %s (data %ld, resource %ld bytes)\r\n",
+	printf_s(idx, "done.\r\nMacBinary: unpacked to %s (data %ld, resource %ld bytes)\r\n",
 	         tmp_name, dlen, rlen);
 	return 1;
 
 fail_out:
+	vt_write(idx, "failed.\r\n");
 	if (dst) FSClose(dst);
 	FSpDelete(&out);
 	if (buf) DisposePtr(buf);
@@ -7224,6 +7233,7 @@ static void cmd_wget_run(int idx, const char* initial_url, int no_progress)
 	int download_ok = 0;
 	/* redirect */
 	int redirect_count = 0;
+	int tls_rsa_only = 0;          /* retrying with RSA key exchange (see below) */
 	char redirect_url[512];
 	unsigned long download_start_tick = 0;
 	unsigned long download_elapsed_ticks = 0;
@@ -7384,7 +7394,19 @@ retry_redirect:
 	if (use_tls)
 	{
 		int ret;
-		unsigned long hs_deadline = TickCount() + 1800; /* 30 sec */
+		/* 2 minutes: the elliptic-curve key exchange takes over 30 seconds on
+		   a 25 MHz 68030 */
+		unsigned long hs_deadline = TickCount() + 120L * 60;
+		/* RSA key exchange: one RSA operation with a small exponent, a second
+		   or two even on a 68030. Used only when the server gives up on the
+		   (much slower) elliptic-curve handshake. */
+		static const int rsa_suites[] = {
+			MBEDTLS_TLS_RSA_WITH_AES_128_GCM_SHA256,
+			MBEDTLS_TLS_RSA_WITH_AES_256_GCM_SHA384,
+			MBEDTLS_TLS_RSA_WITH_AES_128_CBC_SHA256,
+			MBEDTLS_TLS_RSA_WITH_AES_128_CBC_SHA,
+			0
+		};
 
 		printf_s(idx, "%s: WARNING: https certificate NOT verified (no certificate store on\r\n"
 		              "      classic Mac OS). The connection is encrypted, but the site\r\n"
@@ -7417,6 +7439,8 @@ retry_redirect:
 
 		/* skip cert verification (no CA store on classic Mac) */
 		mbedtls_ssl_conf_authmode(&ssl_conf, MBEDTLS_SSL_VERIFY_NONE);
+		if (tls_rsa_only)
+			mbedtls_ssl_conf_ciphersuites(&ssl_conf, rsa_suites);
 		mbedtls_ssl_conf_rng(&ssl_conf, mbedtls_ctr_drbg_random, &ctr_drbg);
 
 		/* force TLS 1.2 max — 1.3 is unreliable on 68K */
@@ -7451,6 +7475,7 @@ retry_redirect:
 				if (TickCount() > hs_deadline)
 				{
 					vt_write(idx, "timed out\r\n");
+					if (!tls_rsa_only) { ret = MBEDTLS_ERR_SSL_TIMEOUT; goto tls_retry_rsa; }
 					mbedtls_ssl_free(&ssl);
 					mbedtls_ssl_config_free(&ssl_conf);
 					mbedtls_ctr_drbg_free(&ctr_drbg);
@@ -7465,6 +7490,27 @@ retry_redirect:
 				continue;
 			}
 			printf_s(idx, "failed (err=-0x%04x)\r\n", (unsigned int)-ret);
+			/* the server dropped the handshake (busy servers give up on a slow
+			   Mac): try once more with the fast RSA key exchange */
+			if (!tls_rsa_only && (ret == MBEDTLS_ERR_NET_RECV_FAILED ||
+			                      ret == MBEDTLS_ERR_NET_SEND_FAILED ||
+			                      ret == MBEDTLS_ERR_SSL_CONN_EOF))
+			{
+tls_retry_rsa:
+				printf_s(idx, "%s: the handshake was too slow for the server; trying again with\r\n"
+				              "      RSA key exchange (faster on slow Macs, but without forward\r\n"
+				              "      secrecy)\r\n", s->wget_is_curl ? "curl" : "wget");
+				mbedtls_ssl_free(&ssl);
+				mbedtls_ssl_config_free(&ssl_conf);
+				mbedtls_ctr_drbg_free(&ctr_drbg);
+				mbedtls_entropy_free(&entropy);
+				OTSndOrderlyDisconnect(ep);
+				OTUnbind(ep);
+				OTCloseProvider(ep);
+				s->endpoint = kOTInvalidEndpointRef;
+				tls_rsa_only = 1;
+				goto retry_redirect;               /* same URL, new connection */
+			}
 			mbedtls_ssl_free(&ssl);
 			mbedtls_ssl_config_free(&ssl_conf);
 			mbedtls_ctr_drbg_free(&ctr_drbg);

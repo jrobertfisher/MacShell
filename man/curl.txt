@@ -10,7 +10,8 @@ DESCRIPTION
     garbage. Like the real curl, it doesn't follow redirects unless asked
     (-L), and it shows the server's error page when there is one.
 
-    HTTPS certificates can't be checked; see wget.
+    HTTPS certificates can't be checked, and slow Macs may fall back to
+    RSA key exchange; see wget.
 
 OPTIONS
     -o file   save to file instead

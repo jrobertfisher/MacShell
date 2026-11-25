@@ -15,6 +15,11 @@ DESCRIPTION
     checked (classic Mac OS has no certificate store), so wget warns each
     time. Don't rely on it for anything sensitive.
 
+    On a slow Mac (a 68030, say) the HTTPS handshake can take a minute,
+    and busy servers give up before it finishes. wget then tries once
+    more with RSA key exchange, which is much faster but has no forward
+    secrecy, and says so.
+
 OPTIONS
     -O file   save as file (replacing it)
     -O -      show the download on the screen
