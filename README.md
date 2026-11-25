@@ -15,14 +15,20 @@ Requirements
 
 MacShell is developed and tested in emulated Mac OS 9.2.1 on PowerPC (QEMU), where all of the
 test suite passes, and runs on a Macintosh LC with a 68030 accelerator and System 7.5.3, where a
-shorter set of the tests has been run. MacShell.bin holds both the 68k and the PowerPC code.
+shorter set of the tests has been run. MacShell holds both the 68k and the PowerPC code.
 
 Download
 --------
-Download `MacShell.bin` from the [latest release](https://github.com/jrobertfisher/MacShell/releases/latest).
-It is a MacBinary file, which keeps the application in one piece on the way: Mac FTP and web
-programs (Fetch, Transmit) and StuffIt Expander turn it into the MacShell application, and so does
-MacShell's own `ftp get` or `wget`. Give MacShell at least 3 MB of memory (the default).
+Download `MacShell_v1.0.1_installer.bin` from the
+[latest release](https://github.com/jrobertfisher/MacShell/releases/latest). It is a MacBinary
+file, which keeps the program in one piece on the way: Mac FTP and web programs (Fetch,
+Transmit), StuffIt Expander, and MacShell's own `ftp get` and `wget` turn it into the
+MacShell Installer application.
+
+The installer shows the licences, installs MacShell in a MacShell folder on the disk you choose,
+sets up `~/.ssh` (Documents:.ssh on the startup disk) with an empty `authorized_keys` file for
+`sshd`, and can gather the randomness MacShell needs for SSH and HTTPS (a few seconds of moving
+the mouse). Give MacShell at least 3 MB of memory (the default).
 
 What it does
 ------------
