@@ -25,7 +25,7 @@ file, which keeps the program in one piece on the way: Mac FTP and web programs 
 Transmit), StuffIt Expander, and MacShell's own `ftp get` and `wget` turn it into the
 MacShell Installer application.
 
-The installer shows the licences, installs MacShell in a MacShell folder on the disk you choose,
+The installer shows the licenses, installs MacShell in a MacShell folder on the disk you choose,
 sets up `~/.ssh` (Documents:.ssh on the startup disk) with an empty `authorized_keys` file for
 `sshd`, and can gather the randomness MacShell needs for SSH and HTTPS (a few seconds of moving
 the mouse). Give MacShell at least 3 MB of memory (the default).
@@ -53,8 +53,8 @@ What it does
   DNS queries, `host`, `hostname`, `ifconfig`, `nc` and `telnet`.
 * **Mac file tools.** View and change type and creator codes, Finder labels, locked and invisible
   flags, and aliases; convert between Mac, Unix and DOS line endings.
-* **A clean terminal.** White on black by default, with other colour schemes; 256 colours and true
-  colour for programs that use them; windows and tabs; scrollback; copy and paste.
+* **A clean terminal.** White on black by default, with other color schemes; 256 colors and true
+  color for programs that use them; windows and tabs; scrollback; copy and paste.
 
 Commands
 --------
@@ -88,7 +88,7 @@ no random number source. MacShell gathers randomness from:
    seed; after the first time you aren't asked again.
 3. **Sound input noise and clock jitter**: the lowest bits of the microphone or line input, and
    timing variations between the processor and the Mac's VIA timer. These are always mixed in and
-   checked by health tests based on NIST SP 800-90B, but they don't count towards the 256 bits
+   checked by health tests based on NIST SP 800-90B, but they don't count toward the 256 bits
    needed, since an idle input can carry mains hum that looks random to those tests.
 
 Everything is mixed with SHA-256. Type `entropy` to see where the randomness came from.
@@ -176,13 +176,13 @@ Security notes
 * SSH checks the server's host key against MacShell's known hosts file.
 * The SSH server is off until you start it, and accepts keys only, never passwords.
 
-Colour schemes
---------------
+Color schemes
+-------------
 **File → Preferences** has a **Color scheme** menu: White on Black (the default), Black on White,
 Green on Black, Amber on Black, Solarized Dark and Solarized Light. **Theme File...** loads a
-`.sttheme` file, and the Background and Text colour menus override a scheme's colours.
+`.sttheme` file, and the Background and Text color menus override a scheme's colors.
 
-To convert an iTerm2 colour scheme to a `.sttheme` file:
+To convert an iTerm2 color scheme to a `.sttheme` file:
 
 ```bash
 python3 tools/itermcolors2sttheme.py MyTheme.itermcolors > MyTheme.sttheme
@@ -232,7 +232,7 @@ To change the icon, edit and run `tools/make_icons.py icons.r docs/icon-preview.
 License and credits
 -------------------
 BSD 2-Clause; see `LICENSE`. MacShell also includes libssh2 (BSD 3-Clause), Mbed TLS (Apache 2.0),
-libvterm (MIT) and parts of the newlib C library; all their licences and notices are in
+libvterm (MIT) and parts of the newlib C library; all their licenses and notices are in
 `docs/LICENSES.txt`, and in MacShell itself with `man license`.
 
 MacShell grew out of [SevenTTY](https://github.com/LXXero/SevenTTY) by LXXero, which is based on

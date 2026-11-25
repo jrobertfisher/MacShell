@@ -5,7 +5,7 @@ SYNOPSIS
     label <0-7> <file>
 
 DESCRIPTION
-    Sets the Finder label (colour): 0 is none, 1 to 7 are the labels in
+    Sets the Finder label (color): 0 is none, 1 to 7 are the labels in
     the Finder's Label menu.
 
 SEE ALSO

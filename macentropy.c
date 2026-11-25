@@ -369,7 +369,7 @@ static void draw_progress(WindowPtr w, long have, long need)
     PaintRect(&fill);
 }
 
-/* Returns credited bits, or -1 if the user cancelled (Command-period). */
+/* Returns credited bits, or -1 if the user canceled (Command-period). */
 static long gather_human(long need)
 {
     Rect r;

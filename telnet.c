@@ -166,7 +166,7 @@ static int tcp_init_connection(int session_idx, char* hostname)
 	if (err == kOTCanceledErr)
 	{
 		if (s->thread_command == EXIT)
-			printf_s(session_idx, "cancelled.\r\n");
+			printf_s(session_idx, "canceled.\r\n");
 		else
 			printf_s(session_idx, "timed out.\r\n");
 		OTUnbind(s->endpoint);

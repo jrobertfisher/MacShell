@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Draws MacShell's icons (an original design: a dark rounded screen with a
-   white ">" prompt and a grey "_" cursor) and writes icons.r:
+   white ">" prompt and a gray "_" cursor) and writes icons.r:
 
      APP_ICON   ICN# icl4 icl8 ics# ics4 ics8   the application
      FILE_ICON  ICN# icl4 icl8 ics# ics4 ics8   MacShell's documents (preferences)
@@ -20,7 +20,7 @@ CURSOR = (153, 153, 153)
 
 
 def mac_palette8():
-    """The standard Macintosh 8-bit colour table (clut 8)."""
+    """The standard Macintosh 8-bit color table (clut 8)."""
     pal = []
     for i in range(215):
         pal.append((255 - 51 * (i // 36), 255 - 51 * ((i // 6) % 6), 255 - 51 * (i % 6)))
@@ -43,7 +43,7 @@ def nearest(rgb, pal):
     gray = abs(r - g) < 12 and abs(g - b) < 12
     best, bi = None, 0
     for i, (pr, pg, pb) in enumerate(pal):
-        if gray and not (pr == pg == pb):  # keep greys grey
+        if gray and not (pr == pg == pb):  # keep grays gray
             continue
         d = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2
         if best is None or d < best:
@@ -202,7 +202,7 @@ def main(out_r, out_png):
     with open(out_r, 'w') as f:
         f.write(''.join(out))
 
-    # preview: 8-bit, 4-bit and B&W at 8x on the classic grey desktop, plus the About picture
+    # preview: 8-bit, 4-bit and B&W at 8x on the classic gray desktop, plus the About picture
     scale, pad = 6, 16
     tiles = []
     for big, small in ((app_big, app_small), (doc_big, doc_small)):

@@ -15,7 +15,7 @@ OPTIONS
     -a        also show invisible files and names starting with a dot
               (such as .ssh)
     -G, --color
-              colour the names: folders blue, applications green, locked
+              color the names: folders blue, applications green, locked
               files red, invisible files dim
 
 EXAMPLES

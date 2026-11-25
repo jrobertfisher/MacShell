@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collects the licences of MacShell and of everything built into it, from
+"""Collects the licenses of MacShell and of everything built into it, from
 the original files, into docs/LICENSES.txt (shipped with releases) and
 man/license.txt (shown by 'man license' in MacShell).
 
@@ -16,7 +16,7 @@ def read(*p):
 
 
 def c_comment(path, first_line, last_line):
-    """The licence block of a C file, without comment markers."""
+    """The license block of a C file, without comment markers."""
     lines = open(path, encoding='utf-8', errors='replace').read().split('\n')
     out = []
     for l in lines[first_line - 1:last_line]:
@@ -49,8 +49,8 @@ apache = '\n'.join(l.strip() if l.strip() in ('Apache License', 'Version 2.0, Ja
                                               'http://www.apache.org/licenses/') else l for l in apache.split('\n'))
 
 parts = [
-    'MacShell includes software from several projects. Their licences and\n'
-    'notices follow, as those licences require.\n',
+    'MacShell includes software from several projects. Their licenses and\n'
+    'notices follow, as those licenses require.\n',
     section('MacShell (BSD 2-Clause License)', read(ROOT, 'LICENSE')),
     section('libssh2 (BSD 3-Clause License)', read(ROOT, 'opentransport-libssh2', 'COPYING')),
     section('Mbed TLS (used under the Apache License 2.0)',
@@ -64,14 +64,14 @@ parts = [
     section('Retro68 and GCC runtime',
             'MacShell is built with Retro68 (https://github.com/autc04/Retro68). Its runtime '
             'library and the GCC runtime libraries are covered by the GCC Runtime Library '
-            'Exception 3.1, which allows them in programs under any licence.'),
+            'Exception 3.1, which allows them in programs under any license.'),
 ]
 text = '\n'.join(parts)
 os.makedirs(os.path.join(ROOT, 'docs'), exist_ok=True)
 with open(os.path.join(ROOT, 'docs', 'LICENSES.txt'), 'w') as f:
     f.write(text)
 
-page = ('NAME\n    license - the licences of MacShell and the software in it\n\nSYNOPSIS\n'
+page = ('NAME\n    license - the licenses of MacShell and the software in it\n\nSYNOPSIS\n'
         '    man license\n\nDESCRIPTION\n' + text)
 with open(os.path.join(ROOT, 'man', 'license.txt'), 'w') as f:
     f.write(page)

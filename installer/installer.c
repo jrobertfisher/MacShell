@@ -1,7 +1,7 @@
 /*
  * MacShell Installer
  *
- * 1. Shows the licences (MacShell's and those of the software in it); the
+ * 1. Shows the licenses (MacShell's and those of the software in it); the
  *    user must click Agree to continue.
  * 2. Installs MacShell (one application with both 68k and PowerPC code)
  *    in a "MacShell" folder on the chosen disk.
@@ -15,7 +15,7 @@
  * pieces (it is too big to load at once on small Macs):
  *   'MSdk' 128 = MacShell's data fork (PowerPC code)
  *   'MSfk' 128 = MacShell's resource fork (68k code and resources)
- *   'TEXT' 128 = the licences
+ *   'TEXT' 128 = the licenses
  */
 #include <Controls.h>
 #include <ControlDefinitions.h>
@@ -98,7 +98,7 @@ static void Fail(const char *message)
 }
 
 /* ------------------------------------------------------------------ */
-/* the licence window                                                 */
+/* the license window                                                 */
 /* ------------------------------------------------------------------ */
 
 static TEHandle gTE;
@@ -126,7 +126,7 @@ static pascal void ScrollAction(ControlHandle c, short part)
     }
 }
 
-/* Shows the licences; returns true if the user clicks Agree. */
+/* Shows the licenses; returns true if the user clicks Agree. */
 static Boolean LicenseAgreed(void)
 {
     WindowPtr w;

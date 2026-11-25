@@ -3,7 +3,7 @@
  * which has no random number source of its own.
  *
  * Sources (credited only after health tests pass):
- *   - sound input noise (the analogue input's lowest bits, even with nothing
+ *   - sound input noise (the analog input's lowest bits, even with nothing
  *     plugged in, on Macs whose input isn't digitally silent)
  *   - clock jitter between the CPU and the VIA timer that drives Microseconds()
  * A seed file in the Preferences folder carries randomness between runs.
@@ -29,9 +29,9 @@ typedef struct {
     int ready;                  /* pool is ready for use */
 } macentropy_stats;
 
-/* Gathers randomness. Call once at startup, after the Toolbox is initialised.
+/* Gathers randomness. Call once at startup, after the Toolbox is initialized.
    Returns 0 when at least MACENTROPY_REQUIRED_BITS are available (asking the
-   user for mouse/keyboard input if needed), or -1 if the user cancelled. */
+   user for mouse/keyboard input if needed), or -1 if the user canceled. */
 int macentropy_init(void);
 
 /* Writes the gathered state to the seed file in the Preferences folder.

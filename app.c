@@ -380,8 +380,8 @@ static void init_solarized_palette(void)
 		make_rgb(&prefs.palette[i], sol[i][0], sol[i][1], sol[i][2]);
 }
 
-/* Built-in colour schemes, in the order of the Color scheme popup.
-   ANSI colour text works in all of them. */
+/* Built-in color schemes, in the order of the Color scheme popup.
+   ANSI color text works in all of them. */
 static const char* const scheme_names[NUM_SCHEMES] = {
 	"White on Black", "Black on White", "Green on Black",
 	"Amber on Black", "Solarized Dark", "Solarized Light"
@@ -408,7 +408,7 @@ static void apply_scheme(int n)
 	strcpy(prefs.theme_name, scheme_names[n]);
 }
 
-/* popup item for the current colours: 1..NUM_SCHEMES, or NUM_SCHEMES+1 for a theme file */
+/* popup item for the current colors: 1..NUM_SCHEMES, or NUM_SCHEMES+1 for a theme file */
 static int current_scheme_item(void)
 {
 	int i;
@@ -871,7 +871,7 @@ void preferences_window(void)
 	Handle itemH;
 	Rect box;
 
-	/* keep the current colours, to restore them on Cancel */
+	/* keep the current colors, to restore them on Cancel */
 	RGBColor saved_palette[16];
 	RGBColor saved_fg = prefs.theme_fg, saved_bg = prefs.theme_bg, saved_cursor = prefs.theme_cursor;
 	RGBColor saved_ofg = prefs.orig_theme_fg, saved_obg = prefs.orig_theme_bg;
@@ -971,7 +971,7 @@ void preferences_window(void)
 				}
 			}
 			SetDialogItemText(theme_name_h, tname);
-			/* a new scheme uses its own background and text colours */
+			/* a new scheme uses its own background and text colors */
 			SetControlValue(bg_color_menu, 1);
 			SetControlValue(fg_color_menu, 1);
 		}
@@ -1005,7 +1005,7 @@ void preferences_window(void)
 	}
 	else
 	{
-		/* Cancel: put the colours back */
+		/* Cancel: put the colors back */
 		memcpy(prefs.palette, saved_palette, sizeof(saved_palette));
 		prefs.theme_fg = saved_fg;
 		prefs.theme_bg = saved_bg;
@@ -2670,7 +2670,7 @@ static int key_file_needs_passphrase(const char* path)
 	buf[n] = '\0';
 	if (strstr(buf, "ENCRYPTED") != NULL) return 1;
 	if (strstr(buf, "BEGIN OPENSSH PRIVATE KEY") != NULL) return 1;
-	return strstr(buf, "PRIVATE KEY-----") == NULL;   /* not a key we recognise: ask */
+	return strstr(buf, "PRIVATE KEY-----") == NULL;   /* not a key we recognize: ask */
 }
 
 /* full path of a file in Documents:.ssh on the startup disk, if it exists */
@@ -3152,7 +3152,7 @@ int ssh_connect(int session_idx)
 	else
 		ok = intro_dialog();
 
-	if (!ok) printf_s(session_idx, "Cancelled, not connecting.\r\n");
+	if (!ok) printf_s(session_idx, "Canceled, not connecting.\r\n");
 
 	if (ok)
 	{

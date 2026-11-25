@@ -209,7 +209,7 @@ static const char* const error_words[] = {
 	"not found", "cannot", "can't", "failed", "fail", "no such", "error", "invalid",
 	"refused", "denied", "unknown", "not a ", "bad ", "timed out", "missing", "not available",
 	"too many", "already exists", "no manual page", "not running", "unreachable", "incomplete",
-	"cancelled", "unavailable", "busy", "no match", "nothing found", "not empty", "unexpected",
+	"canceled", "unavailable", "busy", "no match", "nothing found", "not empty", "unexpected",
 	"must be", "zero increment", "could not", "unable", "no previous", "locked", NULL
 };
 
@@ -7240,7 +7240,7 @@ static void cmd_wget_run(int idx, const char* initial_url, int no_progress)
 
 retry_redirect:
 	/* everything about the previous response starts over: a redirect's own
-	   body must not count towards this one's progress, MacBinary check or
+	   body must not count toward this one's progress, MacBinary check or
 	   result, and an https -> http redirect must not keep using TLS */
 	use_tls = 0;
 	resp_len = 0;
@@ -7374,7 +7374,7 @@ retry_redirect:
 	if (err != noErr)
 	{
 		if (err == kOTCanceledErr)
-			vt_write(idx, s->thread_command == EXIT ? "cancelled\r\n"
+			vt_write(idx, s->thread_command == EXIT ? "canceled\r\n"
 			              : "timed out (no answer in 10 seconds)\r\n");
 		else
 			printf_s(idx, "failed (err=%d)\r\n", (int)err);
@@ -7458,7 +7458,7 @@ retry_redirect:
 		{
 			if (s->thread_command == EXIT || !s->in_use)
 			{
-				vt_write(idx, "cancelled\r\n");
+				vt_write(idx, "canceled\r\n");
 				mbedtls_ssl_free(&ssl);
 				mbedtls_ssl_config_free(&ssl_conf);
 				mbedtls_ctr_drbg_free(&ctr_drbg);
@@ -7612,7 +7612,7 @@ tls_retry_rsa:
 			}
 			if (s->thread_command == EXIT || !s->in_use)
 			{
-				vt_write(idx, "\r\nwget: cancelled\r\n");
+				vt_write(idx, "\r\nwget: canceled\r\n");
 				break;
 			}
 			if (s->wget_binary_stop)
@@ -8148,7 +8148,7 @@ static EndpointRef ftp_tcp_connect(int idx, const char* host,
 	if (err != noErr)
 	{
 		if (err == kOTCanceledErr)
-			vt_write(idx, sessions[idx].thread_command == EXIT ? "cancelled\r\n"
+			vt_write(idx, sessions[idx].thread_command == EXIT ? "canceled\r\n"
 			              : "timed out (no answer in 10 seconds)\r\n");
 		else
 			printf_s(idx, "failed (err=%d)\r\n", (int)err);
@@ -8838,7 +8838,7 @@ static int ftp_download(int idx, EndpointRef ctrl_ep,
 		}
 		if (s->thread_command == EXIT || !s->in_use)
 		{
-			vt_write(idx, "\r\nftp: cancelled\r\n");
+			vt_write(idx, "\r\nftp: canceled\r\n");
 			break;
 		}
 
@@ -9066,7 +9066,7 @@ static int ftp_upload(int idx, EndpointRef ctrl_ep,
 		}
 		if (s->thread_command == EXIT || !s->in_use)
 		{
-			vt_write(idx, "\r\nftp: cancelled\r\n");
+			vt_write(idx, "\r\nftp: canceled\r\n");
 			break;
 		}
 
@@ -9701,10 +9701,10 @@ static void* ftp_session_thread(void* arg)
 		goto done;
 	}
 
-	/* connection lost or command cancelled with Ctrl+C: end the session */
+	/* connection lost or command canceled with Ctrl+C: end the session */
 	if (code < 0 || s->thread_command == EXIT)
 	{
-		vt_write(idx, s->thread_command == EXIT ? "ftp: cancelled; connection closed.\r\n"
+		vt_write(idx, s->thread_command == EXIT ? "ftp: canceled; connection closed.\r\n"
 		                                        : "ftp: connection lost.\r\n");
 		ftp_session_close(idx);
 	}
@@ -10604,7 +10604,7 @@ static void cmd_ftp(int idx, int argc, char** argv)
 		int pw_ok = password_dialog(DLOG_PASSWORD);
 		if (!pw_ok)
 		{
-			vt_write(idx, "ftp: cancelled\r\n");
+			vt_write(idx, "ftp: canceled\r\n");
 			return;
 		}
 		/* password_dialog fills prefs.password as pascal string */
@@ -11107,7 +11107,7 @@ static void scp_download(int idx)
 		vt_write(idx, "\r\n");
 
 	if (s->thread_command == EXIT)
-		printf_s(idx, "scp: cancelled\r\n");
+		printf_s(idx, "scp: canceled\r\n");
 	else
 	{
 		OSType t, c;
@@ -11315,7 +11315,7 @@ upload_done:
 		vt_write(idx, "\r\n");
 
 	if (s->thread_command == EXIT)
-		printf_s(idx, "scp: cancelled\r\n");
+		printf_s(idx, "scp: canceled\r\n");
 	else if (!upload_ok || remaining > 0)
 		printf_s(idx, "scp: upload incomplete (%ld bytes sent)\r\n", total_written);
 	else
@@ -11408,7 +11408,7 @@ static void scp_upload_glob(int idx)
 	}
 
 	if (s->thread_command == EXIT)
-		printf_s(idx, "scp: cancelled after %d file(s)\r\n", count);
+		printf_s(idx, "scp: canceled after %d file(s)\r\n", count);
 	else if (count == 0)
 		printf_s(idx, "scp: no matching files\r\n");
 	else
@@ -11835,7 +11835,7 @@ static void cmd_scp(int idx, int argc, char** argv)
 	/* prompt for auth method + credentials (runs on main thread) */
 	if (!scp_auth_prompt(s))
 	{
-		vt_write(idx, "scp: cancelled\r\n");
+		vt_write(idx, "scp: canceled\r\n");
 		return;
 	}
 
@@ -13930,7 +13930,7 @@ void shell_input(int session_idx, unsigned char c, int modifiers, unsigned char 
 		{
 			nc_inline_disconnect(session_idx);
 			redir_close(session_idx);
-			vt_write(session_idx, "\r\n(cancelled)\r\n");
+			vt_write(session_idx, "\r\n(canceled)\r\n");
 			shell_prompt(session_idx);
 			return;
 		}

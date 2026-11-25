@@ -11,7 +11,7 @@ set(MBED ${ROOT}/opentransport-mbedtls)
 add_compile_definitions("MBEDTLS_USER_CONFIG_FILE=\"${ROOT}/macshell_mbedtls_config.h\"")
 include_directories(${ROOT} ${MBED}/include ${MBED}/library)
 
-# the forks of MacShell and the licences (Mac line endings) for Rez
+# the forks of MacShell and the licenses (Mac line endings) for Rez
 add_custom_command(
     OUTPUT MacShell.data MacShell.rsrc licenses.txt
     COMMAND python3 ${ROOT}/tools/extract_fork.py ${MACSHELL_BIN} MacShell

@@ -1,12 +1,12 @@
 NAME
-    colors - show the terminal's colours
+    colors - show the terminal's colors
 
 SYNOPSIS
     colors
 
 DESCRIPTION
-    Shows the 16 standard colours (as backgrounds and as text) and their
-    values in the current colour scheme, to check how coloured output
+    Shows the 16 standard colors (as backgrounds and as text) and their
+    values in the current color scheme, to check how colored output
     will look.
 
 SEE ALSO

@@ -112,7 +112,7 @@ static long dns_exchange(int idx, InetHost server, const unsigned char* q, long 
    known (at most three tries of 3 seconds) and Ctrl+C (thread_command = EXIT)
    stops it. A dotted address is converted without a lookup.
    Returns 0 and sets *addr, or prints why not ("cmd: ...") and returns -1
-   (-3 if cancelled). */
+   (-3 if canceled). */
 int dns_resolve(int idx, const char* cmd, const char* name, InetHost* addr)
 {
 	char server_s[64];

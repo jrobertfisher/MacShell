@@ -54,7 +54,7 @@ resource 'DITL' (129) {
     }
 };
 
-/* MacShell itself, and the licences */
+/* MacShell itself, and the licenses */
 data 'MSdk' (128, "MacShell data fork (PowerPC code)") { $$read("MacShell.data") };
 data 'MSfk' (128, "MacShell resource fork (68k code and resources)") { $$read("MacShell.rsrc") };
 data 'TEXT' (128, "Licenses") { $$read("licenses.txt") };

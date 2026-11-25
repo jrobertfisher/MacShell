@@ -129,7 +129,7 @@
 #define MENU_FONT_SIZE 133
 #define MENU_SCHEME    134
 
-/* built-in colour schemes (MENU_SCHEME items before "Theme File...") */
+/* built-in color schemes (MENU_SCHEME items before "Theme File...") */
 #define NUM_SCHEMES 6
 
 /* File menu item indices */
