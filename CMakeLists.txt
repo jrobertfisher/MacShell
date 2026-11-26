@@ -69,5 +69,8 @@ add_custom_target(MacShell_bundle_flag ALL
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 add_dependencies(MacShell_bundle_flag MacShell_APPL)
 
-# resources.r includes constants.r: rebuild the resources when it changes
-set_source_files_properties(resources.r PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/constants.r)
+# resources.r includes constants.r (the version) and icons.r: rebuild the
+# resources when they change. (OBJECT_DEPENDS on the .r file isn't enough:
+# Retro68 runs Rez as a custom command, so the dependency goes on its output.)
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/resources.r.rsrc.bin APPEND
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/constants.r ${CMAKE_CURRENT_SOURCE_DIR}/icons.r)
