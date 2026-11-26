@@ -6,7 +6,8 @@ SYNOPSIS
 
 DESCRIPTION
     Lists the running applications and other processes, with their
-    creator codes and memory sizes.
+    PIDs, memory sizes, types and creator codes. A PID stays the same
+    while the program runs; kill takes it.
 
 SEE ALSO
-    free, open
+    kill, free, open

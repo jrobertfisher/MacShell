@@ -217,6 +217,16 @@ def main():
     check('df', 'df -h', regex=r'^Disk .*\n/[^\n]+\s+\d')
     check('free', 'free', contains=['App heap'])
     check('ps', 'ps', contains=['MacShell'])
+    check('ps shows PIDs that kill takes', 'ps', regex=r'^\s+PID\s+SIZE\s+TYPE CREA\s+NAME\n(\s*\d+ +\d+ KB .*\n)+')
+    check('kill needs a program', 'kill', status=1, contains=['usage: kill'])
+    check('kill: no such program', 'kill 1', status=1, contains=['no such program: 1'])
+    check("kill won't quit MacShell itself", 'kill macshell', status=1, contains=['MacShell itself'])
+    # a real program: SimpleText opens, then is asked to quit
+    check('kill: open SimpleText', 'open SimpleText ; sleep 5 ; ps', contains=['SimpleText'])
+    check('kill asks SimpleText to quit', 'kill simpletext', contains=['asked SimpleText to quit'])
+    if wanted('kill: SimpleText has quit'):
+        time.sleep(5)       # it quits once it next gets time, after the command
+    check('kill: SimpleText has quit', 'ps', absent='ttxt  SimpleText')
     check('hostname', 'hostname', regex=r'\S')
     check('ifconfig', 'ifconfig', regex=r'address:\s+\d+\.\d+\.\d+\.\d+')
     check('ifconfig shows the hardware address', 'ifconfig', regex=r'ether:\s+([0-9a-f]{2}:){5}[0-9a-f]{2}')

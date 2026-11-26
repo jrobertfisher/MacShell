@@ -32,7 +32,7 @@ the mouse). Give MacShell at least 3 MB of memory (the default).
 
 What it does
 ------------
-* **A real shell.** 96 commands with Unix-style paths (`/Macintosh HD/Documents`, `~`, `..`,
+* **A real shell.** 97 commands with Unix-style paths (`/Macintosh HD/Documents`, `~`, `..`,
   `cd -`, `/` for the list of disks), tab completion, history, wildcards, `;` and `&&`, `>` and
   `>>`, and an exit status for every command. Every command has a manual page (`man ls`,
   `ls --help`, `man -k word`).
@@ -68,7 +68,7 @@ Commands
 * **Mac files:** `getinfo`, `settype`, `setcreator`, `chown`, `fixtype`, `chmod`, `chattr`,
   `label`, `open` (documents open in their application, as double-clicking does; applications by
   name from any folder), `apps` (every application and what the Desktop Database knows)
-* **System:** `ps`, `free`, `df`, `uname`, `uptime`, `date`, `cal`, `hostname`, `history`,
+* **System:** `ps`, `kill`, `free`, `df`, `uname`, `uptime`, `date`, `cal`, `hostname`, `history`,
   `sleep`, `clear`, `colors`, `entropy`, `exit`
 * **Network:** `ssh`, `ssh-keygen`, `sshd`, `scp`, `ftp`, `wget`, `curl`, `telnet`, `nc`, `ping`,
   `traceroute`, `host`, `dig`, `nslookup`, `ifconfig`

@@ -40,6 +40,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <strings.h>
 
 /* timeout notifier for blocking OT calls in main thread (ping, host) */
 #define OT_TIMEOUT_TICKS  600  /* 10 seconds at 60 ticks/sec */
@@ -2867,13 +2868,12 @@ static void cmd_ps(int idx, int argc, char* argv[])
 	Str255 name;
 	char cname[256];
 	char buf[320];
-	int pid = 0;
 	char type_str[5];
 	char crea_str[5];
 
 	MacGetCurrentProcess(&my_psn);
 
-	vt_write(idx, "  PID   SIZE     TYPE CREA  NAME\r\n");
+	vt_write(idx, "       PID   SIZE     TYPE CREA  NAME\r\n");
 
 	psn.highLongOfPSN = kNoProcess;
 	psn.lowLongOfPSN = kNoProcess;
@@ -2881,8 +2881,6 @@ static void cmd_ps(int idx, int argc, char* argv[])
 	while (GetNextProcess(&psn) == noErr)
 	{
 		Boolean is_me = false;
-
-		pid++;
 
 		memset(&info, 0, sizeof(info));
 		info.processInfoLength = sizeof(ProcessInfoRec);
@@ -2915,9 +2913,11 @@ static void cmd_ps(int idx, int argc, char* argv[])
 		crea_str[3] = info.processSignature & 0xFF;
 		crea_str[4] = '\0';
 
-		snprintf(buf, sizeof(buf), "%s%4d %6ld KB  %s %s  %s%s\r\n",
+		/* PID: the low half of the process serial number, which stays the
+		   same while the program runs (kill takes it) */
+		snprintf(buf, sizeof(buf), "%s%10lu %6ld KB  %s %s  %s%s\r\n",
 			is_me ? "\033[1m" : "",
-			pid,
+			(unsigned long)psn.lowLongOfPSN,
 			info.processSize / 1024,
 			type_str,
 			crea_str,
@@ -2925,6 +2925,88 @@ static void cmd_ps(int idx, int argc, char* argv[])
 			is_me ? "\033[0m" : "");
 		vt_write(idx, buf);
 	}
+}
+
+/* kill <PID or name> ...: asks programs to quit, as the Finder does at Shut
+   Down (a Quit Apple Event). Classic Mac OS has no way to force a program
+   to stop; one that is stuck won't answer. */
+static void cmd_kill(int idx, int argc, char* argv[])
+{
+	int i, failed = 0;
+	ProcessSerialNumber me;
+
+	if (argc < 2)
+	{
+		vt_write(idx, "usage: kill <PID or name> ...   (ps shows them)\r\n");
+		shell_set_status(idx, 1);
+		return;
+	}
+	MacGetCurrentProcess(&me);
+	for (i = 1; i < argc; i++)
+	{
+		ProcessSerialNumber psn;
+		ProcessInfoRec info;
+		Str255 name;
+		char cname[256];
+		int found = 0;
+		char* end;
+		unsigned long want = strtoul(argv[i], &end, 10);
+		int by_pid = (*argv[i] && *end == '\0');
+
+		psn.highLongOfPSN = 0;
+		psn.lowLongOfPSN = kNoProcess;
+		while (GetNextProcess(&psn) == noErr)
+		{
+			int len;
+			memset(&info, 0, sizeof info);
+			info.processInfoLength = sizeof info;
+			info.processName = name;
+			if (GetProcessInformation(&psn, &info) != noErr) continue;
+			len = name[0];
+			memcpy(cname, name + 1, len);
+			cname[len] = '\0';
+			if (by_pid ? psn.lowLongOfPSN == want : strcasecmp(cname, argv[i]) == 0)
+			{
+				found = 1;
+				break;
+			}
+		}
+		if (!found)
+		{
+			printf_s(idx, "kill: no such program: %s\r\n", argv[i]);
+			failed = 1;
+			continue;
+		}
+		{
+			Boolean same = false;
+			SameProcess(&psn, &me, &same);
+			if (same)
+			{
+				vt_write(idx, "kill: that is MacShell itself; use Quit (Cmd-Q)\r\n");
+				failed = 1;
+				continue;
+			}
+		}
+		{
+			AEAddressDesc target = { typeNull, NULL };
+			AppleEvent ev = { typeNull, NULL }, reply = { typeNull, NULL };
+			OSErr e = AECreateDesc(typeProcessSerialNumber, &psn, sizeof psn, &target);
+			if (e == noErr) e = AECreateAppleEvent(kCoreEventClass, kAEQuitApplication, &target,
+			                                       kAutoGenerateReturnID, kAnyTransactionID, &ev);
+			if (e == noErr) e = AESend(&ev, &reply, kAENoReply, kAENormalPriority, kAEDefaultTimeout, NULL, NULL);
+			AEDisposeDesc(&reply);
+			AEDisposeDesc(&ev);
+			AEDisposeDesc(&target);
+			if (e == noErr)
+				printf_s(idx, "kill: asked %s to quit\r\n", cname);
+			else
+			{
+				printf_s(idx, "kill: couldn't ask %s to quit (error %d)\r\n", cname, (int)e);
+				failed = 1;
+			}
+		}
+	}
+	shell_set_status(idx, failed);
 }
 
 static void cmd_ssh(int idx, int argc, char* argv[])
@@ -12765,7 +12847,7 @@ static void cmd_help(int idx, int argc, char* argv[])
 		"Bytes      hexdump xxd cmp md5sum sha1sum sha256sum sha512sum crc32",
 		"Mac files  getinfo chown settype setcreator fixtype chmod chattr label",
 		"Apps       open which apps",
-		"System     date cal uptime uname hostname df free ps history sleep clear",
+		"System     date cal uptime uname hostname df free ps kill history sleep clear",
 		"           colors",
 		"Network    ssh ssh-keygen sshd scp ftp wget curl telnet nc ping traceroute",
 		"           host dig nslookup ifconfig entropy",
@@ -12842,7 +12924,7 @@ static const char* shell_commands[] = {
 	"dig",
 	"delete", "df", "dir", "dirname", "dos2unix", "echo", "entropy", "exit", "file",
 	"fixtype", "fold", "free", "ftp", "getinfo", "grep", "head", "help", "hexdump",
-	"history", "host", "hostname", "ifconfig", "info", "label", "less",
+	"history", "host", "hostname", "ifconfig", "info", "kill", "label", "less",
 	"ln", "ls", "mac2unix", "man", "md", "md5sum", "mkdir", "more", "mv", "nc",
 	"nl", "nslookup", "open", "ping", "ps", "pwd", "quit", "rd", "readlink",
 	"realpath", "ren", "rename", "rev", "rm", "rmdir", "rot13", "scp", "seq",
@@ -13608,6 +13690,7 @@ static void shell_execute_one(int idx, char* line)
 	else if (strcmp(cmd, "entropy") == 0)    cmd_entropy(idx, argc, argv);
 	else if (strcmp(cmd, "free") == 0)       cmd_free(idx, argc, argv);
 	else if (strcmp(cmd, "ps") == 0)         cmd_ps(idx, argc, argv);
+	else if (strcmp(cmd, "kill") == 0)       cmd_kill(idx, argc, argv);
 	else if (strcmp(cmd, "ssh") == 0)        cmd_ssh(idx, argc, argv);
 	else if (strcmp(cmd, "telnet") == 0)    cmd_telnet(idx, argc, argv);
 	else if (strcmp(cmd, "nc") == 0)        cmd_nc(idx, argc, argv);

@@ -1,0 +1,23 @@
+NAME
+    kill - ask a program to quit
+
+SYNOPSIS
+    kill <PID or name> ...
+
+DESCRIPTION
+    Asks each program to quit, the way the Finder does at Shut Down:
+    it sends the program a Quit Apple Event, and the program saves its
+    work and quits. ps shows the PIDs and names; a name with spaces needs
+    quotes.
+
+    Classic Mac OS can't force a program to stop. A program that is
+    stuck won't answer; then use the Force Quit keys (Command-Option-
+    Escape) on the Mac itself.
+
+EXAMPLES
+    kill SimpleText
+    kill 8197
+    kill "Internet Explorer"
+
+SEE ALSO
+    ps
