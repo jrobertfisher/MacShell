@@ -19,7 +19,7 @@ shorter set of the tests has been run. MacShell holds both the 68k and the Power
 
 Download
 --------
-Download `MacShell_v1.0.1_installer.bin` from the
+Download `MacShell_v1.0.2_installer.bin` from the
 [latest release](https://github.com/jrobertfisher/MacShell/releases/latest). It is a MacBinary
 file, which keeps the program in one piece on the way: Mac FTP and web programs (Fetch,
 Transmit), StuffIt Expander, and MacShell's own `ftp get` and `wget` turn it into the
